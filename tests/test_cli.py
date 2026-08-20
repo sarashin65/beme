@@ -136,3 +136,25 @@ def test_invalid_cli_input_is_an_argparse_error_without_traceback(tmp_path: Path
     assert process.returncode != 0
     assert "error" in process.stderr.lower()
     assert "traceback" not in process.stderr.lower()
+
+
+def test_cli_llm_load_failure_falls_back_to_mock_without_traceback(tmp_path: Path) -> None:
+    process = run_cli(
+        tmp_path,
+        "convert",
+        "こうしょう",
+        "--dictionary",
+        str(write_dictionary(tmp_path)),
+        "--reranker",
+        "llm",
+        "--model-path",
+        str(tmp_path / "missing.gguf"),
+        "--preceding-context",
+        "歴史資料を調べる",
+        "--json",
+    )
+
+    assert process.returncode == 0, process.stderr
+    assert json.loads(process.stdout)["candidates"][0]["surface"] == "考証"
+    assert "falling back to mock reranker" in process.stderr
+    assert "traceback" not in process.stderr.lower()

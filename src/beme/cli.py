@@ -1,14 +1,26 @@
-"""Command-line interface for deterministic Phase 1 conversion."""
+"""Command-line interface for BeME kana conversion."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
+import sys
 from typing import Sequence
 
 from .converter import Converter, ConversionResult
-from .reranker import ConversionContext, MockContextReranker
+from .reranker import (
+    DEFAULT_LLM_CONTEXT_SIZE,
+    DEFAULT_LLM_MODEL_PATH,
+    DEFAULT_LLM_WEIGHT,
+    DEFAULT_VITERBI_WEIGHT,
+    ConversionContext,
+    LLMLogitsReranker,
+    LLMRerankerUnavailable,
+    MockContextReranker,
+    Reranker,
+)
 
 
 _DEFAULT_DICTIONARY = Path(__file__).resolve().parents[2] / "data" / "dictionary.tsv"
@@ -21,6 +33,16 @@ def _positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError("must be a positive integer") from exc
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
+def _non_negative_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if not math.isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError("must be a finite non-negative number")
     return parsed
 
 
@@ -53,8 +75,53 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="text after the cursor",
     )
+    convert.add_argument(
+        "--reranker",
+        choices=("mock", "llm"),
+        default="mock",
+        help="context reranker backend (default: mock)",
+    )
+    convert.add_argument(
+        "--model-path",
+        type=Path,
+        default=DEFAULT_LLM_MODEL_PATH,
+        help=f"GGUF model for --reranker llm (default: {DEFAULT_LLM_MODEL_PATH})",
+    )
+    convert.add_argument(
+        "--llm-weight",
+        type=_non_negative_float,
+        default=DEFAULT_LLM_WEIGHT,
+        help=f"mean negative log-likelihood weight (default: {DEFAULT_LLM_WEIGHT:g})",
+    )
+    convert.add_argument(
+        "--viterbi-weight",
+        type=_non_negative_float,
+        default=DEFAULT_VITERBI_WEIGHT,
+        help=f"Viterbi cost weight (default: {DEFAULT_VITERBI_WEIGHT:g})",
+    )
+    convert.add_argument(
+        "--llm-context-size",
+        type=_positive_int,
+        default=DEFAULT_LLM_CONTEXT_SIZE,
+        help=f"llama.cpp context token limit (default: {DEFAULT_LLM_CONTEXT_SIZE})",
+    )
     convert.add_argument("--json", action="store_true", help="emit one JSON object")
     return parser
+
+
+def _build_reranker(args: argparse.Namespace) -> Reranker:
+    if args.reranker == "mock":
+        return MockContextReranker()
+    try:
+        return LLMLogitsReranker(
+            args.model_path,
+            llm_weight=args.llm_weight,
+            viterbi_weight=args.viterbi_weight,
+            context_size=args.llm_context_size,
+        )
+    except LLMRerankerUnavailable as exc:
+        print(f"warning: {exc}; falling back to mock reranker", file=sys.stderr)
+        return MockContextReranker()
 
 
 def _print_text(result: ConversionResult) -> None:
@@ -80,7 +147,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         converter = Converter.from_tsv(
             args.dictionary,
             beam_width=args.beam_width,
-            reranker=MockContextReranker(),
+            reranker=_build_reranker(args),
         )
         result = converter.convert(
             args.reading,

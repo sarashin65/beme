@@ -11,7 +11,13 @@ from .lattice import (
     k_best_viterbi,
     pos_transition_cost,
 )
-from .reranker import ConversionContext, MockContextReranker, Reranker
+from .reranker import (
+    ConversionContext,
+    LLMLogitsReranker,
+    LLMRerankerUnavailable,
+    MockContextReranker,
+    Reranker,
+)
 
 __version__ = "0.1.0"
 
@@ -27,6 +33,8 @@ __all__ = [
     "LatticeNode",
     "LatticePath",
     "MiniDictionary",
+    "LLMLogitsReranker",
+    "LLMRerankerUnavailable",
     "MockContextReranker",
     "Reranker",
     "Token",
