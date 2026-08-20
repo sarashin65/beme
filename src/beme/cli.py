@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .converter import Converter, ConversionResult
+from .reranker import ConversionContext, MockContextReranker
 
 
 _DEFAULT_DICTIONARY = Path(__file__).resolve().parents[2] / "data" / "dictionary.tsv"
@@ -42,6 +43,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=_DEFAULT_DICTIONARY,
         help=f"TSV dictionary (default: {_DEFAULT_DICTIONARY})",
     )
+    convert.add_argument(
+        "--preceding-context",
+        default="",
+        help="confirmed text before the current reading",
+    )
+    convert.add_argument(
+        "--following-context",
+        default="",
+        help="text after the cursor",
+    )
     convert.add_argument("--json", action="store_true", help="emit one JSON object")
     return parser
 
@@ -49,11 +60,15 @@ def build_parser() -> argparse.ArgumentParser:
 def _print_text(result: ConversionResult) -> None:
     print(f"reading: {result.reading}")
     for index, candidate in enumerate(result.candidates, start=1):
-        print(f"{index}. {candidate.surface}\tcost={candidate.cost:.6f}")
+        score = f"\tscore={candidate.score:.6f}" if result.reranked else ""
+        print(f"{index}. {candidate.surface}\tcost={candidate.cost:.6f}{score}")
     confidence = "None" if result.confidence is None else f"{result.confidence:.6f}"
     print(f"confidence: {confidence}")
     print(f"cascade_threshold: {result.cascade_threshold:g}")
     print(f"needs_rerank: {'yes' if result.needs_rerank else 'no'}")
+    print(f"preceding_context: {json.dumps(result.context.preceding, ensure_ascii=False)}")
+    print(f"following_context: {json.dumps(result.context.following, ensure_ascii=False)}")
+    print(f"reranked: {'yes' if result.reranked else 'no'}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -62,11 +77,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command != "convert":
         parser.error("a command is required")
     try:
-        converter = Converter.from_tsv(args.dictionary, beam_width=args.beam_width)
+        converter = Converter.from_tsv(
+            args.dictionary,
+            beam_width=args.beam_width,
+            reranker=MockContextReranker(),
+        )
         result = converter.convert(
             args.reading,
             k=args.top_k,
             cascade_threshold=args.cascade_threshold,
+            context=ConversionContext(
+                preceding=args.preceding_context,
+                following=args.following_context,
+            ),
         )
     except (OSError, TypeError, ValueError) as exc:
         parser.error(str(exc))

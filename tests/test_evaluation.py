@@ -13,6 +13,7 @@ import pytest
 
 from beme.converter import Converter
 from beme.evaluation import evaluate, load_cases, mrr_at_k, ndcg_at_k
+from beme.reranker import MockContextReranker
 
 
 def write_dictionary(tmp_path: Path) -> Path:
@@ -69,6 +70,52 @@ def test_evaluate_reports_exact_aggregate_metrics_and_rerank_rate(tmp_path: Path
     assert len(report["per_query"]) == 2
 
 
+def test_contextual_cases_are_included_in_ndcg_and_mrr(tmp_path: Path) -> None:
+    dictionary = tmp_path / "context-dictionary.tsv"
+    dictionary.write_text(
+        "reading\tsurface\tpos\tcost\n"
+        "こうしょう\t交渉\tnoun\t0.0\n"
+        "こうしょう\t考証\tnoun\t0.4\n",
+        encoding="utf-8",
+    )
+    cases_path = tmp_path / "context-cases.jsonl"
+    cases_path.write_text(
+        json.dumps(
+            {
+                "id": "history",
+                "reading": "こうしょう",
+                "preceding_context": "歴史を研究する",
+                "judgments": {"考証": 3},
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "id": "business",
+                "reading": "こうしょう",
+                "following_context": "について商談する",
+                "judgments": {"交渉": 3},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = evaluate(
+        Converter.from_tsv(dictionary, reranker=MockContextReranker()),
+        load_cases(cases_path),
+        k=2,
+    )
+
+    assert report["ndcg_at_k"] == pytest.approx(1.0)
+    assert report["mrr_at_k"] == pytest.approx(1.0)
+    assert report["top1_accuracy"] == pytest.approx(1.0)
+    assert report["context_rerank_rate"] == pytest.approx(1.0)
+    assert [query["retrieved"][0] for query in report["per_query"]] == ["考証", "交渉"]
+
+
 def test_evaluation_script_emits_json_report(tmp_path: Path) -> None:
     dictionary = write_dictionary(tmp_path)
     cases_path = tmp_path / "cases.jsonl"
@@ -121,3 +168,20 @@ def test_load_cases_rejects_malformed_or_nonpositive_judgments(tmp_path: Path) -
     )
     with pytest.raises(ValueError):
         load_cases(invalid_judgment)
+
+    invalid_context = tmp_path / "invalid-context.jsonl"
+    invalid_context.write_text(
+        json.dumps(
+            {
+                "id": "bad-context",
+                "reading": "かみ",
+                "preceding_context": 1,
+                "judgments": {"神": 1},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="preceding_context"):
+        load_cases(invalid_context)

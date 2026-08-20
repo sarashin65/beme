@@ -1,4 +1,4 @@
-"""BeME Phase 1 deterministic kana-to-surface converter."""
+"""BeME deterministic kana conversion and Phase 2 context reranking."""
 
 from .converter import Candidate, ConversionResult, Converter, Token
 from .dictionary import Dictionary, DictionaryEntry, MiniDictionary, load_tsv
@@ -11,12 +11,14 @@ from .lattice import (
     k_best_viterbi,
     pos_transition_cost,
 )
+from .reranker import ConversionContext, MockContextReranker, Reranker
 
 __version__ = "0.1.0"
 
 __all__ = [
     "Candidate",
     "ConversionResult",
+    "ConversionContext",
     "Converter",
     "Dictionary",
     "DictionaryEntry",
@@ -25,6 +27,8 @@ __all__ = [
     "LatticeNode",
     "LatticePath",
     "MiniDictionary",
+    "MockContextReranker",
+    "Reranker",
     "Token",
     "__version__",
     "build_lattice",

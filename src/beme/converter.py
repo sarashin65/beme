@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .dictionary import Dictionary
 from .lattice import Lattice, Token, build_lattice, k_best_viterbi
+from .reranker import ConversionContext, Reranker
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,16 +18,22 @@ class Candidate:
     surface: str
     cost: float
     tokens: tuple[Token, ...]
+    score: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cost", float(self.cost))
         if not isinstance(self.tokens, tuple):
             object.__setattr__(self, "tokens", tuple(self.tokens))
+        score = self.cost if self.score is None else float(self.score)
+        if not math.isfinite(score):
+            raise ValueError("candidate score must be finite")
+        object.__setattr__(self, "score", score)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "surface": self.surface,
             "cost": self.cost,
+            "score": self.score,
             "tokens": [
                 {
                     "reading": token.reading,
@@ -48,6 +55,8 @@ class ConversionResult:
     confidence: float | None
     cascade_threshold: float
     needs_rerank: bool
+    context: ConversionContext
+    reranked: bool
 
     def __post_init__(self) -> None:
         if not isinstance(self.candidates, tuple):
@@ -55,6 +64,8 @@ class ConversionResult:
         if self.confidence is not None:
             object.__setattr__(self, "confidence", float(self.confidence))
         object.__setattr__(self, "cascade_threshold", float(self.cascade_threshold))
+        if not isinstance(self.context, ConversionContext):
+            raise TypeError("context must be a ConversionContext")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -63,25 +74,38 @@ class ConversionResult:
             "confidence": self.confidence,
             "cascade_threshold": self.cascade_threshold,
             "needs_rerank": self.needs_rerank,
+            "context": self.context.to_dict(),
+            "reranked": self.reranked,
         }
 
 
 class Converter:
     """Build lattices and rank their paths with a deterministic K-best beam."""
 
-    def __init__(self, dictionary: Dictionary, beam_width: int = 64) -> None:
+    def __init__(
+        self,
+        dictionary: Dictionary,
+        beam_width: int = 64,
+        reranker: Reranker | None = None,
+    ) -> None:
         if not isinstance(dictionary, Dictionary):
             raise TypeError("dictionary must be a Dictionary")
         if not isinstance(beam_width, int) or isinstance(beam_width, bool) or beam_width <= 0:
             raise ValueError("beam_width must be a positive integer")
         self.dictionary = dictionary
         self.beam_width = beam_width
+        self.reranker = reranker
 
     @classmethod
-    def from_tsv(cls, path: str | Path, beam_width: int = 64) -> "Converter":
+    def from_tsv(
+        cls,
+        path: str | Path,
+        beam_width: int = 64,
+        reranker: Reranker | None = None,
+    ) -> "Converter":
         """Load a strict TSV dictionary and create a converter."""
 
-        return cls(Dictionary.from_tsv(path), beam_width=beam_width)
+        return cls(Dictionary.from_tsv(path), beam_width=beam_width, reranker=reranker)
 
     def build_lattice(self, reading: str) -> Lattice:
         return build_lattice(reading, self.dictionary)
@@ -91,6 +115,7 @@ class Converter:
         reading: str,
         k: int = 5,
         cascade_threshold: float = 2.0,
+        context: ConversionContext | None = None,
     ) -> ConversionResult:
         """Convert a reading into up to *k* unique, ranked surfaces."""
 
@@ -102,6 +127,10 @@ class Converter:
             raise ValueError("cascade_threshold must be a finite number") from exc
         if not math.isfinite(threshold):
             raise ValueError("cascade_threshold must be a finite number")
+        if context is None:
+            context = ConversionContext()
+        elif not isinstance(context, ConversionContext):
+            raise TypeError("context must be a ConversionContext")
 
         lattice = self.build_lattice(reading)
         paths = k_best_viterbi(lattice, beam_width=self.beam_width)
@@ -114,19 +143,31 @@ class Converter:
             surface = path.surface
             if surface not in by_surface:
                 by_surface[surface] = Candidate(surface, path.cost, path.tokens)
-        candidates = tuple(
-            sorted(by_surface.values(), key=lambda candidate: (candidate.cost, candidate.surface))[:k]
-        )
+        base_candidates = tuple(sorted(by_surface.values(), key=lambda candidate: (candidate.cost, candidate.surface)))
+        base_output = base_candidates[:k]
         confidence = None
-        if len(candidates) >= 2:
-            confidence = candidates[1].cost - candidates[0].cost
+        if len(base_output) >= 2:
+            confidence = base_output[1].cost - base_output[0].cost
         needs_rerank = confidence is not None and confidence < threshold
+
+        reranked = not context.is_empty and self.reranker is not None
+        if reranked:
+            ranked_candidates = tuple(self.reranker.rerank(base_candidates, context))
+            if len(ranked_candidates) != len(base_candidates) or {
+                candidate.surface for candidate in ranked_candidates
+            } != {candidate.surface for candidate in base_candidates}:
+                raise ValueError("reranker must return every input candidate exactly once")
+            candidates = ranked_candidates[:k]
+        else:
+            candidates = base_output
         return ConversionResult(
             reading=reading,
             candidates=candidates,
             confidence=confidence,
             cascade_threshold=threshold,
             needs_rerank=needs_rerank,
+            context=context,
+            reranked=reranked,
         )
 
 

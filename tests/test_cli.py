@@ -14,7 +14,9 @@ def write_dictionary(tmp_path: Path) -> Path:
     path.write_text(
         "reading\tsurface\tpos\tcost\n"
         "かみ\t神\tnoun\t0\n"
-        "かみ\t紙\tnoun\t1\n",
+        "かみ\t紙\tnoun\t1\n"
+        "こうしょう\t交渉\tnoun\t0\n"
+        "こうしょう\t考証\tnoun\t0.4\n",
         encoding="utf-8",
     )
     return path
@@ -77,6 +79,49 @@ def test_json_cli_is_machine_readable_and_honors_top_k(tmp_path: Path) -> None:
     assert "confidence" in payload
     assert "cascade_threshold" in payload
     assert isinstance(payload["needs_rerank"], bool)
+
+
+def test_cli_context_options_rerank_and_are_reported_in_json(tmp_path: Path) -> None:
+    dictionary = str(write_dictionary(tmp_path))
+    history = run_cli(
+        tmp_path,
+        "convert",
+        "こうしょう",
+        "--dictionary",
+        dictionary,
+        "--top-k",
+        "1",
+        "--preceding-context",
+        "歴史資料を調べる",
+        "--json",
+    )
+    business = run_cli(
+        tmp_path,
+        "convert",
+        "こうしょう",
+        "--dictionary",
+        dictionary,
+        "--top-k",
+        "1",
+        "--following-context",
+        "について商談する",
+        "--json",
+    )
+
+    assert history.returncode == 0, history.stderr
+    history_payload = json.loads(history.stdout)
+    assert history_payload["candidates"][0]["surface"] == "考証"
+    assert history_payload["context"] == {
+        "preceding": "歴史資料を調べる",
+        "following": "",
+    }
+    assert history_payload["reranked"] is True
+
+    assert business.returncode == 0, business.stderr
+    business_payload = json.loads(business.stdout)
+    assert business_payload["candidates"][0]["surface"] == "交渉"
+    assert business_payload["context"]["following"] == "について商談する"
+    assert business_payload["reranked"] is True
 
 
 def test_invalid_cli_input_is_an_argparse_error_without_traceback(tmp_path: Path) -> None:

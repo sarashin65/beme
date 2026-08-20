@@ -17,6 +17,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from beme.converter import Converter  # noqa: E402
 from beme.evaluation import evaluate, load_cases  # noqa: E402
+from beme.reranker import MockContextReranker  # noqa: E402
 
 
 DEFAULT_DICTIONARY = REPOSITORY_ROOT / "data" / "dictionary.tsv"
@@ -63,6 +64,7 @@ def _human_report(report: dict[str, object]) -> str:
             f"MRR@{k}: {float(report['mrr_at_k']):.6f}",
             f"Top-1 accuracy: {float(report['top1_accuracy']):.6f}",
             f"Rerank rate: {float(report['rerank_rate']):.6f}",
+            f"Context rerank rate: {float(report['context_rerank_rate']):.6f}",
         )
     )
 
@@ -71,7 +73,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        converter = Converter.from_tsv(args.dictionary, beam_width=args.beam_width)
+        converter = Converter.from_tsv(
+            args.dictionary,
+            beam_width=args.beam_width,
+            reranker=MockContextReranker(),
+        )
         cases = load_cases(args.cases)
         report = evaluate(
             converter,

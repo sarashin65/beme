@@ -8,8 +8,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .reranker import ConversionContext
+
 
 _REQUIRED_CASE_KEYS = frozenset({"id", "reading", "judgments"})
+_OPTIONAL_CASE_KEYS = frozenset({"preceding_context", "following_context"})
+_ALLOWED_CASE_KEYS = _REQUIRED_CASE_KEYS | _OPTIONAL_CASE_KEYS
 
 
 def _reject_json_constant(value: str) -> None:
@@ -33,8 +37,9 @@ def _line_error(line_number: int, message: str) -> ValueError:
 def load_cases(path: str | Path) -> list[dict[str, Any]]:
     """Load and strictly validate evaluation cases from UTF-8 JSONL.
 
-    Every physical line must contain one JSON object with exactly ``id``,
-    ``reading``, and ``judgments`` fields.  Judgment values are positive
+    Every physical line must contain one JSON object with ``id``, ``reading``,
+    and ``judgments`` fields.  ``preceding_context`` and
+    ``following_context`` are optional strings.  Judgment values are positive
     integers.  Validation errors identify the offending line.
     """
     cases: list[dict[str, Any]] = []
@@ -63,9 +68,10 @@ def load_cases(path: str | Path) -> list[dict[str, Any]]:
                 raise _line_error(line_number, f"invalid JSON: {exc}") from exc
             if not isinstance(value, dict):
                 raise _line_error(line_number, "case must be a JSON object")
-            if set(value) != _REQUIRED_CASE_KEYS:
+            keys = set(value)
+            if not _REQUIRED_CASE_KEYS.issubset(keys) or not keys.issubset(_ALLOWED_CASE_KEYS):
                 missing = sorted(_REQUIRED_CASE_KEYS.difference(value))
-                extra = sorted(set(value).difference(_REQUIRED_CASE_KEYS))
+                extra = sorted(keys.difference(_ALLOWED_CASE_KEYS))
                 details: list[str] = []
                 if missing:
                     details.append(f"missing fields {missing}")
@@ -83,6 +89,12 @@ def load_cases(path: str | Path) -> list[dict[str, Any]]:
             reading = value["reading"]
             if not isinstance(reading, str) or not reading.strip():
                 raise _line_error(line_number, "reading must be a non-empty string")
+            preceding_context = value.get("preceding_context", "")
+            if not isinstance(preceding_context, str):
+                raise _line_error(line_number, "preceding_context must be a string")
+            following_context = value.get("following_context", "")
+            if not isinstance(following_context, str):
+                raise _line_error(line_number, "following_context must be a string")
 
             judgments = value["judgments"]
             if not isinstance(judgments, dict):
@@ -103,6 +115,8 @@ def load_cases(path: str | Path) -> list[dict[str, Any]]:
                     "id": case_id,
                     "reading": reading,
                     "judgments": dict(judgments),
+                    "preceding_context": preceding_context,
+                    "following_context": following_context,
                 }
             )
     return cases
@@ -193,6 +207,12 @@ def _case_value(case: Mapping[str, Any] | Any, name: str) -> Any:
     return getattr(case, name)
 
 
+def _optional_case_value(case: Mapping[str, Any] | Any, name: str, default: Any) -> Any:
+    if isinstance(case, Mapping):
+        return case.get(name, default)
+    return getattr(case, name, default)
+
+
 def evaluate(
     converter: Any,
     cases: Iterable[Mapping[str, Any] | Any],
@@ -206,15 +226,21 @@ def evaluate(
     mrr_total = 0.0
     top1_total = 0
     rerank_total = 0
+    context_rerank_total = 0
 
     for case in cases:
         case_id = _case_value(case, "id")
         reading = _case_value(case, "reading")
         judgments = _case_value(case, "judgments")
+        context = ConversionContext(
+            preceding=_optional_case_value(case, "preceding_context", ""),
+            following=_optional_case_value(case, "following_context", ""),
+        )
         result = converter.convert(
             reading,
             k=cutoff,
             cascade_threshold=cascade_threshold,
+            context=context,
         )
         candidates = list(result.candidates)
         surfaces = [_surface(candidate) for candidate in candidates]
@@ -222,20 +248,24 @@ def evaluate(
         query_mrr = mrr_at_k(surfaces, judgments, cutoff)
         top1_correct = bool(surfaces and _relevance(surfaces[0], judgments) > 0)
         needs_rerank = bool(result.needs_rerank)
+        reranked = bool(result.reranked)
         ndcg_total += query_ndcg
         mrr_total += query_mrr
         top1_total += int(top1_correct)
         rerank_total += int(needs_rerank)
+        context_rerank_total += int(reranked)
         per_query.append(
             {
                 "id": case_id,
                 "reading": reading,
                 "retrieved": surfaces,
+                "context": context.to_dict(),
                 "ndcg_at_k": query_ndcg,
                 "mrr_at_k": query_mrr,
                 "top1_correct": top1_correct,
                 "confidence": result.confidence,
                 "needs_rerank": needs_rerank,
+                "reranked": reranked,
             }
         )
 
@@ -248,6 +278,7 @@ def evaluate(
         "mrr_at_k": mrr_total / denominator,
         "top1_accuracy": top1_total / denominator,
         "rerank_rate": rerank_total / denominator,
+        "context_rerank_rate": context_rerank_total / denominator,
         "per_query": per_query,
     }
 
