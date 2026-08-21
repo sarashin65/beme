@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-from .dictionary import Dictionary
+from .dictionary import Dictionary, is_hiragana
 from .lattice import Lattice, Token, build_lattice, k_best_viterbi
 from .reranker import ConversionContext, Reranker
 
@@ -108,7 +108,7 @@ class Converter:
         return cls(Dictionary.from_tsv(path), beam_width=beam_width, reranker=reranker)
 
     def build_lattice(self, reading: str) -> Lattice:
-        return build_lattice(reading, self.dictionary)
+        return build_lattice(reading, self.dictionary, allow_literals=True)
 
     def convert(
         self,
@@ -116,6 +116,8 @@ class Converter:
         k: int = 5,
         cascade_threshold: float = 2.0,
         context: ConversionContext | None = None,
+        *,
+        allow_literals: bool = False,
     ) -> ConversionResult:
         """Convert a reading into up to *k* unique, ranked surfaces."""
 
@@ -131,6 +133,10 @@ class Converter:
             context = ConversionContext()
         elif not isinstance(context, ConversionContext):
             raise TypeError("context must be a ConversionContext")
+        if not isinstance(reading, str) or not reading:
+            raise ValueError("reading must be a non-empty string")
+        if not allow_literals and not is_hiragana(reading):
+            raise ValueError("reading must be non-empty hiragana (ー allowed)")
 
         lattice = self.build_lattice(reading)
         paths = k_best_viterbi(lattice, beam_width=self.beam_width)
