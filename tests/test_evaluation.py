@@ -185,3 +185,72 @@ def test_load_cases_rejects_malformed_or_nonpositive_judgments(tmp_path: Path) -
     )
     with pytest.raises(ValueError, match="preceding_context"):
         load_cases(invalid_context)
+
+
+def test_cli_top_k_and_rerank_k_are_independent_widths(tmp_path: Path) -> None:
+    dictionary = tmp_path / "dictionary.tsv"
+    dictionary.write_text(
+        "reading\tsurface\tpos\tcost\n"
+        "かみ\t神\tnoun\t0\n"
+        "かみ\t紙\tnoun\t1\n"
+        "かみ\t髪\tnoun\t2\n"
+        "かみ\t上\tnoun\t3\n",
+        encoding="utf-8",
+    )
+    cases_path = tmp_path / "cases.jsonl"
+    cases_path.write_text(
+        json.dumps(
+            {
+                "id": "kami",
+                "reading": "かみ",
+                "preceding_context": "神社で",
+                "judgments": {"神": 1},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(root / "src"), env.get("PYTHONPATH", "")) if part
+    )
+
+    def run(*extra: str) -> dict:
+        process = subprocess.run(
+            [
+                sys.executable,
+                str(root / "scripts" / "evaluate.py"),
+                "--dictionary",
+                str(dictionary),
+                "--cases",
+                str(cases_path),
+                *extra,
+                "--json",
+            ],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert process.returncode == 0, process.stderr
+        return json.loads(process.stdout)
+
+    # Reranking a wider set than the output width: only expressible once the
+    # two widths stopped sharing a flag.
+    wide = run("--top-k", "2", "--rerank-k", "3")
+    assert wide["top_k"] == 2
+    assert wide["rerank_k"] == 3
+    assert wide["k"] == 2, "--top-k alone governs the metric cutoff"
+    assert wide["scored_candidate_count"] == 3, "--rerank-k alone governs reranker input"
+    assert len(wide["per_query"][0]["retrieved"]) == 2
+
+    # Omitting --rerank-k keeps the historical behaviour: every candidate is
+    # scored, and --top-k only trims the output.
+    default = run("--top-k", "2")
+    assert default["rerank_k"] is None
+    assert default["k"] == 2
+    assert default["scored_candidate_count"] == 4
+    assert len(default["per_query"][0]["retrieved"]) == 2

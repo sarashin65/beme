@@ -40,9 +40,9 @@ P0 前は oracle recall@5 が 13.0%、Top-1 完全一致が 6.0% であり、P0 
 **検証コマンド（想定）**:
 ```sh
 cd ~/work/beme-kexp
-.venv/bin/python scripts/evaluate.py --suite ajimee --k 10 --reranker cross-encoder --json > results_k10.json
-.venv/bin/python scripts/evaluate.py --suite ajimee --k 20 --reranker cross-encoder --json > results_k20.json
-.venv/bin/python scripts/evaluate.py --suite ajimee --k 64 --reranker cross-encoder --json > results_k64.json
+.venv/bin/python scripts/evaluate.py --suite ajimee --top-k 10 --rerank-k 10 --reranker cross-encoder --json > results_k10.json
+.venv/bin/python scripts/evaluate.py --suite ajimee --top-k 20 --rerank-k 20 --reranker cross-encoder --json > results_k20.json
+.venv/bin/python scripts/evaluate.py --suite ajimee --top-k 64 --rerank-k 64 --reranker cross-encoder --json > results_k64.json
 ```
 
 ## 7. 実装のタスク分割

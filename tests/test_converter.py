@@ -109,6 +109,37 @@ def test_rerank_k_limits_reranker_input_without_changing_default(tmp_path: Path)
     assert unchanged.counts[0] > 2
 
 
+def test_rerank_k_wider_than_k_promotes_a_candidate_the_output_width_hides(
+    tmp_path: Path,
+) -> None:
+    dictionary = write_dictionary(
+        tmp_path,
+        ("かみ", "神", "noun", 0.0),
+        ("かみ", "紙", "noun", 1.0),
+        ("かみ", "髪", "noun", 2.0),
+        ("かみ", "上", "noun", 3.0),
+    )
+
+    class ReversingReranker:
+        def rerank(self, candidates, context):
+            return tuple(reversed(tuple(candidates)))
+
+    context = ConversionContext(preceding="文脈")
+
+    # Scoring three candidates lets the third-cheapest surface win, even though
+    # the output keeps only two.
+    wide = Converter.from_tsv(dictionary, reranker=ReversingReranker(), rerank_k=3).convert(
+        "かみ", k=2, context=context
+    )
+    assert [candidate.surface for candidate in wide.candidates] == ["髪", "紙"]
+
+    # Scoring only two candidates cannot reach it.
+    narrow = Converter.from_tsv(dictionary, reranker=ReversingReranker(), rerank_k=2).convert(
+        "かみ", k=2, context=context
+    )
+    assert [candidate.surface for candidate in narrow.candidates] == ["紙", "神"]
+
+
 def test_confidence_boundary_is_strictly_below_threshold(tmp_path: Path) -> None:
     dictionary = write_dictionary(
         tmp_path,
