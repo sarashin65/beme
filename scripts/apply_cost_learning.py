@@ -24,7 +24,8 @@ from beme.ipadic import katakana_to_hiragana, map_ipadic_pos  # noqa: E402
 
 
 DEFAULT_CORPUS = REPOSITORY_ROOT / "data" / "corpus.txt"
-DEFAULT_DICTIONARY = REPOSITORY_ROOT / "data" / "dictionary_learned.tsv"
+DEFAULT_INPUT = REPOSITORY_ROOT / "data" / "dictionary.tsv"
+DEFAULT_OUTPUT = REPOSITORY_ROOT / "data" / "dictionary_learned.tsv"
 DEFAULT_TOP_N = 5_000
 DEFAULT_ALPHA = 0.1
 DEFAULT_MIN_COST = 0.1
@@ -95,11 +96,15 @@ def collect_frequencies(
         raise ValueError("workers must be greater than zero")
     with Path(corpus).open("r", encoding="utf-8") as handle:
         chunks = _chunks(handle, chunk_lines)
+        accumulator: Counter[tuple[str, str, str]] = Counter()
         if worker_count == 1:
-            partial = map(count_chunk, chunks)
-            return sum(partial, Counter())
+            for chunk_counts in map(count_chunk, chunks):
+                accumulator.update(chunk_counts)
+            return accumulator
         with mp.Pool(worker_count) as pool:
-            return sum(pool.imap(count_chunk, chunks), Counter())
+            for chunk_counts in pool.imap(count_chunk, chunks):
+                accumulator.update(chunk_counts)
+        return accumulator
 
 
 def select_vocabulary(
@@ -112,20 +117,25 @@ def select_vocabulary(
 
 
 def apply_costs(
-    dictionary: str | Path,
+    input_dictionary: str | Path,
+    output_dictionary: str | Path,
     frequencies: Counter[tuple[str, str, str]],
     *,
     top_n: int = DEFAULT_TOP_N,
     alpha: float = DEFAULT_ALPHA,
     min_cost: float = DEFAULT_MIN_COST,
 ) -> tuple[int, int]:
-    """Atomically update matching dictionary rows and return (matched, changed)."""
+    """Read *input_dictionary*, apply cost learning, and atomically write
+    *output_dictionary* (which may be the same path as the input). Returns
+    (matched, changed).
+    """
     if not math.isfinite(alpha) or alpha < 0:
         raise ValueError("alpha must be a finite non-negative number")
     if not math.isfinite(min_cost) or min_cost < 0:
         raise ValueError("min_cost must be a finite non-negative number")
     selected = select_vocabulary(frequencies, top_n)
-    source = Path(dictionary)
+    source = Path(input_dictionary)
+    destination = Path(output_dictionary)
     rows: list[str] = []
     with source.open("r", encoding="utf-8", newline="") as handle:
         rows.extend(line.rstrip("\r\n") for line in handle)
@@ -153,11 +163,13 @@ def apply_costs(
 
     temporary_name: str | None = None
     try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", dir=source.parent, delete=False) as handle:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", newline="", dir=destination.parent, delete=False
+        ) as handle:
             temporary_name = handle.name
             handle.write("\n".join(output_rows))
             handle.write("\n")
-        os.replace(temporary_name, source)
+        os.replace(temporary_name, destination)
         temporary_name = None
     finally:
         if temporary_name is not None:
@@ -169,10 +181,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Apply corpus frequency cost learning to BeME dictionary")
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
     parser.add_argument(
-        "--dictionary",
+        "--input",
         type=Path,
-        default=DEFAULT_DICTIONARY,
-        help="output dictionary path (default: data/dictionary_learned.tsv; keeps data/dictionary.tsv unchanged)",
+        default=DEFAULT_INPUT,
+        help="input dictionary path to read costs from (default: data/dictionary.tsv)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_OUTPUT,
+        help=(
+            "output dictionary path to write learned costs to (default: "
+            "data/dictionary_learned.tsv; keeps --input unchanged unless the "
+            "same path is passed for both)"
+        ),
     )
     parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA)
@@ -185,19 +207,44 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # Validate the input dictionary before running corpus parsing (which can
+    # take minutes on the full 100MB corpus) so a bad --input path fails fast
+    # instead of after all that work is discarded.
+    if not args.input.is_file():
+        print(f"error: --input dictionary not found: {args.input}", file=sys.stderr)
+        return 1
+
+    # Create the output directory up front too, so a missing directory is
+    # reported immediately rather than after corpus parsing completes.
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+
     frequencies = collect_frequencies(args.corpus, workers=args.workers, chunk_lines=args.chunk_lines)
     matched, changed = apply_costs(
-        args.dictionary,
+        args.input,
+        args.output,
         frequencies,
         top_n=args.top_n,
         alpha=args.alpha,
         min_cost=args.min_cost,
     )
-    result = {"corpus": str(args.corpus), "dictionary": str(args.dictionary), "unique_tokens": len(frequencies), "total_tokens": sum(frequencies.values()), "top_n": args.top_n, "matched_entries": matched, "changed_entries": changed}
+    result = {
+        "corpus": str(args.corpus),
+        "input": str(args.input),
+        "output": str(args.output),
+        "unique_tokens": len(frequencies),
+        "total_tokens": sum(frequencies.values()),
+        "top_n": args.top_n,
+        "matched_entries": matched,
+        "changed_entries": changed,
+    }
     if args.json:
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     else:
-        print("Updated {changed_entries} of {matched_entries} matched entries ({unique_tokens} unique tokens).".format(**result))
+        print(
+            "Updated {changed_entries} of {matched_entries} matched entries "
+            "({unique_tokens} unique tokens) from {input} into {output}.".format(**result)
+        )
     return 0
 
 

@@ -33,9 +33,20 @@ AJIMEE の最良値を優先し、採用パラメータを **対象語彙数 1,0
 
 AJIMEE の具体例では、`ニテンジタリスルコトハ` がベースラインの「に展示たりする糊塗は」から学習後に「に展示たりすることは」へ改善した。一方、`ワタシ` を含む `ajimee-jwtd-v2-1133` は「私」の表記自体は維持したが、文全体の誤変換は残った。
 
+## 再現手順
+
+採用パラメータ（対象語彙数 1,000、α=0.20）で学習後辞書を再生成するコマンドは次のとおり。`--input` は既存辞書、`--output` は学習後辞書の書き出し先で、`data/dictionary.tsv` は変更されない。
+
+```bash
+uv run --group dev python scripts/apply_cost_learning.py \
+    --input data/dictionary.tsv \
+    --output data/dictionary_learned.tsv \
+    --top-n 1000 --alpha 0.20 --workers 4
+```
+
 ## 自己確認
 
-- `uv run python scripts/apply_cost_learning.py --top-n 1000 --alpha 0.20 --workers 4` 相当の実行が完了した。
+- 上記コマンド（`--top-n 1000 --alpha 0.20 --workers 4`）相当の実行が完了した。
 - 学習後辞書は 919 件に一致し、919 件を変更した。
 - `scripts/evaluate.py` の handmade / AJIMEE / Mozc、および `--suite all` を実行した。
 - `data/dictionary.tsv` は変更されていないことを確認した。
