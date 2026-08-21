@@ -18,6 +18,12 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from beme.converter import Converter  # noqa: E402
+from beme.benchmark import (  # noqa: E402
+    evaluate_ajimee,
+    evaluate_mozc,
+    load_ajimee_cases,
+    load_mozc_cases,
+)
 from beme.evaluation import evaluate, load_cases  # noqa: E402
 from beme.reranker import (  # noqa: E402
     DEFAULT_LLM_CONTEXT_SIZE,
@@ -33,6 +39,8 @@ from beme.reranker import (  # noqa: E402
 
 DEFAULT_DICTIONARY = REPOSITORY_ROOT / "data" / "dictionary.tsv"
 DEFAULT_CASES = REPOSITORY_ROOT / "data" / "evaluation_cases.jsonl"
+DEFAULT_AJIMEE_CASES = REPOSITORY_ROOT / "data" / "ajimee_bench_jwtd_v2_v1.json"
+DEFAULT_MOZC_CASES = REPOSITORY_ROOT / "data" / "mozc_oss.tsv"
 
 
 def _positive_int(value: str) -> int:
@@ -56,9 +64,16 @@ def _threshold(value: str) -> float:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Evaluate BeME conversion ranking")
+    parser = argparse.ArgumentParser(description="Evaluate BeME conversion quality")
+    parser.add_argument(
+        "--suite",
+        choices=("handmade", "ajimee", "mozc", "all"),
+        default="handmade",
+    )
     parser.add_argument("--dictionary", type=Path, default=DEFAULT_DICTIONARY)
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
+    parser.add_argument("--ajimee-cases", type=Path, default=DEFAULT_AJIMEE_CASES)
+    parser.add_argument("--mozc-cases", type=Path, default=DEFAULT_MOZC_CASES)
     parser.add_argument("--top-k", type=_positive_int, default=5)
     parser.add_argument("--beam-width", type=_positive_int, default=64)
     parser.add_argument("--cascade-threshold", type=_threshold, default=2.0)
@@ -114,22 +129,54 @@ def _load_reranker(args: argparse.Namespace) -> tuple[Reranker, str]:
 
 
 def _human_report(report: dict[str, object]) -> str:
-    k = report["k"]
-    return "\n".join(
-        (
-            f"Reranker: {report['reranker_effective']}"
-            f" (requested: {report['reranker_requested']})",
+    suite = report["suite"]
+    reranker = (
+        f"Reranker: {report['reranker_effective']}"
+        f" (requested: {report['reranker_requested']})"
+    )
+    latency = (
+        f"Candidate latency: {float(report['candidate_latency_ms']):.3f} ms"
+        if report["candidate_latency_ms"] is not None
+        else "Candidate latency: n/a"
+    )
+    if suite == "handmade":
+        k = report["k"]
+        lines = (
             f"Queries: {report['query_count']}",
             f"NDCG@{k}: {float(report['ndcg_at_k']):.6f}",
             f"MRR@{k}: {float(report['mrr_at_k']):.6f}",
             f"Top-1 accuracy: {float(report['top1_accuracy']):.6f}",
             f"Rerank rate: {float(report['rerank_rate']):.6f}",
             f"Context rerank rate: {float(report['context_rerank_rate']):.6f}",
-            f"Candidate latency: {float(report['candidate_latency_ms']):.3f} ms"
-            if report["candidate_latency_ms"] is not None
-            else "Candidate latency: n/a",
         )
-    )
+    elif suite == "ajimee":
+        lines = (
+            f"Cases: {report['case_count']}",
+            f"Mean CER: {float(report['mean_cer']):.6f}",
+            f"Mean edit distance: {float(report['mean_edit_distance']):.6f}",
+            f"Exact-match accuracy: {float(report['exact_match_accuracy']):.6f}",
+        )
+    elif suite == "mozc":
+        lines = (
+            f"Cases: {report['case_count']}",
+            f"Evaluated: {report['evaluated_count']}",
+            f"Passed: {report['passed_count']}",
+            f"Pass rate: {float(report['pass_rate']):.6f}",
+            f"Skipped: {report['skipped_count']}",
+        )
+    else:
+        handmade = report["handmade"]
+        ajimee = report["ajimee"]
+        mozc = report["mozc"]
+        lines = (
+            f"Handmade: {handmade['query_count']} cases, "
+            f"NDCG@{handmade['k']}={float(handmade['ndcg_at_k']):.6f}",
+            f"AJIMEE: {ajimee['case_count']} cases, "
+            f"mean CER={float(ajimee['mean_cer']):.6f}",
+            f"Mozc: {mozc['passed_count']}/{mozc['evaluated_count']} passed, "
+            f"{mozc['skipped_count']} skipped",
+        )
+    return "\n".join((reranker, *lines, latency))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -143,13 +190,33 @@ def main(argv: list[str] | None = None) -> int:
             beam_width=args.beam_width,
             reranker=measured_reranker,
         )
-        cases = load_cases(args.cases)
-        report = evaluate(
-            converter,
-            cases,
-            k=args.top_k,
-            cascade_threshold=args.cascade_threshold,
-        )
+        reports: dict[str, dict[str, object]] = {}
+        if args.suite in {"handmade", "all"}:
+            reports["handmade"] = evaluate(
+                converter,
+                load_cases(args.cases),
+                k=args.top_k,
+                cascade_threshold=args.cascade_threshold,
+            )
+            reports["handmade"]["suite"] = "handmade"
+        if args.suite in {"ajimee", "all"}:
+            reports["ajimee"] = evaluate_ajimee(
+                converter,
+                load_ajimee_cases(args.ajimee_cases),
+                k=args.top_k,
+                cascade_threshold=args.cascade_threshold,
+            )
+        if args.suite in {"mozc", "all"}:
+            reports["mozc"] = evaluate_mozc(
+                converter,
+                load_mozc_cases(args.mozc_cases),
+                k=args.top_k,
+                cascade_threshold=args.cascade_threshold,
+            )
+        if args.suite == "all":
+            report: dict[str, object] = {"suite": "all", **reports}
+        else:
+            report = reports[args.suite]
         report["reranker_requested"] = args.reranker
         report["reranker_effective"] = effective_reranker
         report["candidate_latency_ms"] = measured_reranker.candidate_latency_ms

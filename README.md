@@ -4,14 +4,16 @@ LLM と検索技術を活用する自作日本語 IME。ひらがな入力の K-
 
 ## 状態
 
-2026-08-21: Phase 2 の `Reranker` 契約、キーワードモック、Qwen2.5-0.5B の平均対数尤度リランカ、文脈付き評価を実装済み。
+2026-08-21: Phase 2 のモデル組み込みに加え、評価データ拡充ステップ 1 を実装済み。
 
 - 自作ミニ辞書: `data/dictionary.tsv`
-- 文脈なし 12 件、文脈付き 2 件の評価ケース: `data/evaluation_cases.jsonl`
-- モック実測値: Top-1 `1.000000`、NDCG@5 `0.992972`
-- LLM 実測値: Top-1 `0.928571`、NDCG@5 `0.966609`
+- BeME 手作り評価: 文脈なし 12 件、文脈付き 2 件を `data/evaluation_cases.jsonl` に維持
+- AJIMEE-Bench: 文章変換 200 件を `data/ajimee_bench_jwtd_v2_v1.json` に導入
+- Mozc quality regression: コーナーケース 500 件を `data/mozc_oss.tsv` に導入
+- 手作り 14 件のモック実測値: Top-1 `1.000000`、NDCG@5 `0.992972`
+- 手作り 14 件の LLM 実測値: Top-1 `0.928571`、NDCG@5 `0.966609`
 
-評価ケースと辞書を同時に手作りした 14 件の小規模なベースライン値であり、一般的な日本語 IME 品質を示す値ではありません。LLM は文脈付き「歴史→考証」を「交渉」より上位にできず、現時点ではモックを下回ります。
+手作り評価はケースと辞書を同時に作った小規模なベースラインであり、一般的な日本語 IME 品質を示しません。外部データは独立した品質測定と不足語彙・既知の誤変換の検出に使います。
 
 ## アーキテクチャ
 
@@ -108,16 +110,23 @@ $$
 ```
 
 ```sh
+# 既定: 手作り 14 件のランキング評価
 python scripts/evaluate.py \
+  --suite handmade \
   --dictionary data/dictionary.tsv \
   --cases data/evaluation_cases.jsonl \
   --top-k 5 \
   --beam-width 64 \
   --cascade-threshold 2.0
 
-# 機械可読出力
-python scripts/evaluate.py --reranker mock --json
-python scripts/evaluate.py --reranker llm --json
+# 外部データを個別または一括評価
+python scripts/evaluate.py --suite ajimee
+python scripts/evaluate.py --suite mozc --top-k 5
+python scripts/evaluate.py --suite all --top-k 5
+
+# 機械可読出力（項目別結果を含む）
+python scripts/evaluate.py --suite all --reranker mock --json
+python scripts/evaluate.py --suite handmade --reranker llm --json
 ```
 
 レポートにはクエリ数、文脈付きケースを含む NDCG@k / MRR@k、Top-1 accuracy、カスケード対象率、実際の文脈リランク率、リランカの候補 1 件あたりレイテンシを出力します。レイテンシはモデルロードを除く各 `rerank()` 全体（共通文脈のプレフィルと状態保存を含む）を候補数で割った値です。NDCG はゲイン $2^{relevance}-1$ と `log2(rank + 1)` の割引を使い、MRR は最初の関連候補の逆順位です。`preceding_context` と `following_context` は任意で、省略時は空文字列として扱います。
@@ -131,13 +140,26 @@ python scripts/evaluate.py --reranker llm --json
 
 このデータでは LLM はモックより精度・速度ともに劣ります。特に一般的な「交渉」を好む頻度バイアスが残るため、評価ケースの拡充と重み校正が必要です。
 
+### 外部評価データと判定方法
+
+詳細な出所、固定 commit、SHA-256、ライセンス、データごとの判定規則は [`data/README.md`](data/README.md) を参照してください。
+
+**AJIMEE-Bench** の `JWTD_v2/v1` は 200 件の全角カタカナ読みと複数の許容出力を持ちます（ローマ字入力ではありません）。全角カタカナをひらがなへ正規化し、句読点・数字・記号はリテラルとして保持します。リテラルで区切られたひらがな区間を BeME で変換し、区間の K-best を合成します。`context_text` は左文脈に使います。項目ごとに許容出力のうち最小の Levenshtein 編集距離と $\mathrm{CER}=\mathrm{distance}/|\mathrm{reference}|$ を採用し、平均 CER、平均編集距離、完全一致率を集計します。
+
+**Mozc `oss.tsv`** は conversion 系 498 件を回帰判定し、BeME に存在しない suggestion 系 2 件を理由付きでスキップします。`Conversion Expected [N]` は正解全文の順位（`N` は 0 始まり）、`Conversion Match` は Top-1 の必須部分文字列、`Conversion Not Match` は Top-1 に含めてはいけない既知の誤変換として判定します。`--top-k` より深い期待順位は観測できないため、必要な深さを指定して評価してください。
+
+ライセンスは upstream の一次情報に従います。
+
+- AJIMEE-Bench `JWTD_v2/v1`: **CC BY-SA 3.0**。依頼時資料の MIT 記載とは異なり、upstream README がデータは元データに準拠して CC BY-SA 3.0 と明記しています。帰属: azooKey/AJIMEE-Bench contributors および日本語 Wikipedia 入力誤りデータセット v2。`data/licenses/AJIMEE-BENCH-CC-BY-SA-3.0.txt` を参照。
+- Mozc `oss.tsv`: **BSD 3-Clause**、Copyright 2010-2018 Google Inc. `data/licenses/MOZC-BSD-3-Clause.txt` に著作権表示、条件、免責条項を収録。
+
 ## テスト
 
 ```sh
 pytest -q
 ```
 
-辞書検証、ラティス接続、未知語フォールバック、複数分割、候補の一意性と決定性、確信度の境界、CLI、リランカ契約、前文・後方文脈による順位変更、文脈付き NDCG/MRR をテストします。LLM 用テストは実モデルをロードせず、決定的な fake backend で平均尤度、線形結合、`save_state` / `load_state`、ロード失敗時のフォールバックを検証します。
+辞書検証、ラティス接続、未知語フォールバック、複数分割、候補の一意性と決定性、確信度の境界、CLI、リランカ契約、前文・後方文脈による順位変更、文脈付き NDCG/MRR に加え、カタカナ→ひらがな入力アダプタ、句読点保持、Levenshtein/CER、Mozc の正例・禁止誤変換・順位・スキップ規則、導入データ件数（200/500）、手作り14件の維持をテストします。LLM 用テストは実モデルをロードせず、決定的な fake backend で平均尤度、線形結合、`save_state` / `load_state`、ロード失敗時のフォールバックを検証します。
 
 ## 制約と今後
 

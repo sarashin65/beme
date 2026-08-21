@@ -1,0 +1,22 @@
+AJIMEE-Bench JWTD_v2/v1 evaluation data
+
+Vendored file: data/ajimee_bench_jwtd_v2_v1.json
+Source: https://github.com/azooKey/AJIMEE-Bench/tree/401666cd56d1a570c2021798b64b6da4396bfd45/JWTD_v2/v1
+Upstream file: JWTD_v2/v1/evaluation_items.json
+Upstream commit: 401666cd56d1a570c2021798b64b6da4396bfd45
+Upstream project: AJIMEE-Bench (Advanced Japanese IME Evaluation Benchmark), azooKey contributors
+
+The AJIMEE-Bench README states that JWTD_v2/v1 is based on the Japanese
+Wikipedia Typo Dataset v2 and that this evaluation data follows the source
+data license: Creative Commons Attribution-ShareAlike 3.0 (CC BY-SA 3.0).
+
+License: https://creativecommons.org/licenses/by-sa/3.0/
+Upstream attribution and construction details:
+https://github.com/azooKey/AJIMEE-Bench/blob/401666cd56d1a570c2021798b64b6da4396bfd45/README.md
+Japanese Wikipedia Typo Dataset v2:
+https://nlp.ist.i.kyoto-u.ac.jp/?日本語Wikipedia入力誤りデータセット
+
+The vendored JSON is an unmodified copy of the upstream file. BeME's loader,
+katakana-to-hiragana adapter, and evaluation code are original code and are
+not copied from AJIMEE-Bench. AJIMEE-Bench's utils.py is separately published
+under CC0 1.0 Universal and is not vendored here.
