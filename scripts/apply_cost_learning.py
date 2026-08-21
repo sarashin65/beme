@@ -24,7 +24,7 @@ from beme.ipadic import katakana_to_hiragana, map_ipadic_pos  # noqa: E402
 
 
 DEFAULT_CORPUS = REPOSITORY_ROOT / "data" / "corpus.txt"
-DEFAULT_DICTIONARY = REPOSITORY_ROOT / "data" / "dictionary.tsv"
+DEFAULT_DICTIONARY = REPOSITORY_ROOT / "data" / "dictionary_learned.tsv"
 DEFAULT_TOP_N = 5_000
 DEFAULT_ALPHA = 0.1
 DEFAULT_MIN_COST = 0.1
@@ -168,7 +168,12 @@ def apply_costs(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Apply corpus frequency cost learning to BeME dictionary")
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
-    parser.add_argument("--dictionary", type=Path, default=DEFAULT_DICTIONARY)
+    parser.add_argument(
+        "--dictionary",
+        type=Path,
+        default=DEFAULT_DICTIONARY,
+        help="output dictionary path (default: data/dictionary_learned.tsv; keeps data/dictionary.tsv unchanged)",
+    )
     parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     parser.add_argument("--alpha", type=float, default=DEFAULT_ALPHA)
     parser.add_argument("--min-cost", type=float, default=DEFAULT_MIN_COST)

@@ -113,4 +113,8 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     import os
-    os._exit(main())
+
+    status = main()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(status)
