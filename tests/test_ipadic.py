@@ -106,6 +106,41 @@ def test_build_dictionary_merges_overlay_and_filters_invalid_rows(tmp_path: Path
     assert len(sha256_file(source)) == 64
 
 
+def test_build_dictionary_penalizes_surfaces_containing_katakana_letters(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "ipadic.tar.gz"
+    _write_source_archive(
+        source,
+        [
+            _ipadic_row("コト", 6_500, "名詞", "コト"),
+            _ipadic_row("サ変", 6_500, "名詞", "サヘン"),
+            _ipadic_row("半ｶﾅ", 6_500, "名詞", "ハンカナ"),
+            _ipadic_row("こと", 6_500, "名詞", "コト"),
+            _ipadic_row("事", 6_500, "名詞", "コト"),
+        ],
+    )
+    overlay = tmp_path / "overlay.tsv"
+    overlay.write_text(
+        "reading\tsurface\tpos\tcost\n"
+        "おーばーれい\tオーバーレイ\tnoun\t0.800\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "dictionary.tsv"
+
+    build_dictionary(source, output, overlays=[overlay], encoding="utf-8")
+
+    costs = {entry.surface: entry.cost for entry in Dictionary.from_tsv(output).entries}
+    assert costs == {
+        "コト": 4.5,
+        "サ変": 4.5,
+        "半ｶﾅ": 4.5,
+        "こと": 3.5,
+        "事": 3.5,
+        "オーバーレイ": 0.8,
+    }
+
+
 def test_build_dictionary_rejects_malformed_source_row(tmp_path: Path) -> None:
     source = tmp_path / "ipadic.tar.gz"
     _write_source_archive(source, [["too", "short"]])

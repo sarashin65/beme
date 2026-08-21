@@ -20,6 +20,10 @@ DEFAULT_RAW_COST_CEILING = 10_000
 DEFAULT_BEME_COST_FLOOR = 1.75
 DEFAULT_BEME_COST_CEILING = 5.25
 
+# IPADIC is an analysis dictionary: its katakana surfaces are valid inputs but
+# over-produced as IME outputs.  AJIMEE ablation selected this fixed P0 value.
+KATAKANA_SURFACE_COST_PENALTY = 1.0
+
 
 @dataclass(frozen=True, slots=True)
 class DictionaryBuildStats:
@@ -48,6 +52,18 @@ def katakana_to_hiragana(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value)
     return "".join(
         chr(ord(char) - 0x60) if "\u30a1" <= char <= "\u30f6" else char
+        for char in normalized
+    )
+
+
+def _contains_katakana(surface: str) -> bool:
+    """Return whether *surface* contains a full- or half-width katakana letter."""
+
+    normalized = unicodedata.normalize("NFKC", surface)
+    return any(
+        "\u30a1" <= char <= "\u30fa"
+        or "\u30fd" <= char <= "\u30ff"
+        or "\u31f0" <= char <= "\u31ff"
         for char in normalized
     )
 
@@ -184,6 +200,8 @@ def _load_imported_entries(
             beme_floor=beme_floor,
             beme_ceiling=beme_ceiling,
         )
+        if _contains_katakana(surface):
+            cost += KATAKANA_SURFACE_COST_PENALTY
         key = (reading, surface, pos)
         previous = entries.get(key)
         if previous is not None:
