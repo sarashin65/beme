@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from .dictionary import is_hiragana
 from .reranker import ConversionContext
 
 
@@ -79,27 +78,6 @@ def katakana_to_hiragana(text: str) -> str:
     return "".join(converted)
 
 
-def _input_spans(text: str) -> Iterable[tuple[bool, str]]:
-    start = 0
-    convertible = is_hiragana(text[0])
-    for index in range(1, len(text)):
-        current = is_hiragana(text[index])
-        if current != convertible:
-            yield convertible, text[start:index]
-            start = index
-            convertible = current
-    yield convertible, text[start:]
-
-
-def _deduplicate_candidates(candidates: Iterable[SentenceCandidate], k: int) -> tuple[SentenceCandidate, ...]:
-    by_surface: dict[str, SentenceCandidate] = {}
-    for candidate in sorted(candidates, key=lambda item: (item.cost, item.surface)):
-        by_surface.setdefault(candidate.surface, candidate)
-        if len(by_surface) == k:
-            break
-    return tuple(by_surface.values())
-
-
 def convert_sentence(
     converter: Any,
     input_text: str,
@@ -108,11 +86,11 @@ def convert_sentence(
     cascade_threshold: float = 2.0,
     preceding_context: str = "",
 ) -> tuple[SentenceCandidate, ...]:
-    """Convert kana spans and pass punctuation, digits, and symbols through.
+    """Convert a complete sentence with one exact lattice K-best search.
 
     AJIMEE uses katakana readings while BeME accepts hiragana, so katakana is
-    normalized before conversion.  Non-kana literals delimit independent
-    lattice spans.  Their K-best outputs are composed and pruned globally.
+    normalized before conversion.  Non-kana literals are fixed edges in the
+    same lattice and therefore do not cause local K-best pruning.
     """
 
     if not isinstance(input_text, str) or not input_text:
@@ -123,28 +101,18 @@ def convert_sentence(
         raise TypeError("preceding_context must be a string")
 
     normalized = katakana_to_hiragana(input_text)
-    candidates = (SentenceCandidate("", 0.0),)
     context = ConversionContext(preceding=preceding_context)
-    for convertible, span in _input_spans(normalized):
-        if not convertible:
-            candidates = tuple(
-                SentenceCandidate(candidate.surface + span, candidate.cost)
-                for candidate in candidates
-            )
-            continue
-        result = converter.convert(
-            span,
-            k=k,
-            cascade_threshold=cascade_threshold,
-            context=context,
-        )
-        combined = (
-            SentenceCandidate(prefix.surface + suffix.surface, prefix.cost + suffix.cost)
-            for prefix in candidates
-            for suffix in result.candidates
-        )
-        candidates = _deduplicate_candidates(combined, k)
-    return candidates
+    result = converter.convert(
+        normalized,
+        k=k,
+        cascade_threshold=cascade_threshold,
+        context=context,
+        allow_literals=True,
+    )
+    return tuple(
+        SentenceCandidate(candidate.surface, candidate.cost)
+        for candidate in result.candidates
+    )
 
 
 def edit_distance(reference: str, hypothesis: str) -> int:
