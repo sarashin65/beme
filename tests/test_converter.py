@@ -95,10 +95,11 @@ def test_rerank_k_limits_reranker_input_without_changing_default(tmp_path: Path)
             return tuple(candidates)
 
     limited = RecordingReranker()
-    Converter.from_tsv(dictionary, reranker=limited, rerank_k=2).convert(
+    result_limited = Converter.from_tsv(dictionary, reranker=limited, rerank_k=2).convert(
         "かみ", k=4, context=ConversionContext(preceding="文脈")
     )
     assert limited.counts == [2]
+    assert len(result_limited.candidates) == 3
 
     unchanged = RecordingReranker()
     result = Converter.from_tsv(dictionary, reranker=unchanged).convert(

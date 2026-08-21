@@ -174,6 +174,8 @@ class Converter:
                 candidate.surface for candidate in ranked_candidates
             } != {candidate.surface for candidate in rerank_candidates}:
                 raise ValueError("reranker must return every input candidate exactly once")
+            if self.rerank_k is not None:
+                ranked_candidates = ranked_candidates + base_candidates[self.rerank_k :]
             candidates = ranked_candidates[:k]
         else:
             candidates = base_output
