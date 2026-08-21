@@ -26,10 +26,17 @@ from beme.benchmark import (  # noqa: E402
 )
 from beme.evaluation import evaluate, load_cases  # noqa: E402
 from beme.reranker import (  # noqa: E402
+    DEFAULT_CROSS_ENCODER_BATCH_SIZE,
+    DEFAULT_CROSS_ENCODER_CACHE_DIR,
+    DEFAULT_CROSS_ENCODER_MODEL,
+    DEFAULT_CROSS_ENCODER_WEIGHT,
     DEFAULT_LLM_CONTEXT_SIZE,
     DEFAULT_LLM_MODEL_PATH,
     DEFAULT_LLM_WEIGHT,
     DEFAULT_VITERBI_WEIGHT,
+    SUPPORTED_CROSS_ENCODER_MODELS,
+    CrossEncoderReranker,
+    CrossEncoderRerankerUnavailable,
     LLMLogitsReranker,
     LLMRerankerUnavailable,
     MockContextReranker,
@@ -77,7 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k", type=_positive_int, default=5)
     parser.add_argument("--beam-width", type=_positive_int, default=64)
     parser.add_argument("--cascade-threshold", type=_threshold, default=2.0)
-    parser.add_argument("--reranker", choices=("mock", "llm"), default="mock")
+    parser.add_argument(
+        "--reranker",
+        choices=("mock", "llm", "cross-encoder"),
+        default="mock",
+    )
     parser.add_argument("--model-path", type=Path, default=DEFAULT_LLM_MODEL_PATH)
     parser.add_argument("--llm-weight", type=_threshold, default=DEFAULT_LLM_WEIGHT)
     parser.add_argument("--viterbi-weight", type=_threshold, default=DEFAULT_VITERBI_WEIGHT)
@@ -86,6 +97,27 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         default=DEFAULT_LLM_CONTEXT_SIZE,
     )
+    parser.add_argument(
+        "--cross-encoder-model",
+        choices=SUPPORTED_CROSS_ENCODER_MODELS,
+        default=DEFAULT_CROSS_ENCODER_MODEL,
+    )
+    parser.add_argument(
+        "--cross-encoder-cache-dir",
+        type=Path,
+        default=DEFAULT_CROSS_ENCODER_CACHE_DIR,
+    )
+    parser.add_argument(
+        "--cross-encoder-weight",
+        type=_threshold,
+        default=DEFAULT_CROSS_ENCODER_WEIGHT,
+    )
+    parser.add_argument(
+        "--cross-encoder-batch-size",
+        type=_positive_int,
+        default=DEFAULT_CROSS_ENCODER_BATCH_SIZE,
+    )
+    parser.add_argument("--cross-encoder-local-files-only", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json", help="emit JSON")
     return parser
 
@@ -113,26 +145,47 @@ class _MeasuredReranker:
 def _load_reranker(args: argparse.Namespace) -> tuple[Reranker, str]:
     if args.reranker == "mock":
         return MockContextReranker(), "mock"
+    if args.reranker == "llm":
+        try:
+            return (
+                LLMLogitsReranker(
+                    args.model_path,
+                    llm_weight=args.llm_weight,
+                    viterbi_weight=args.viterbi_weight,
+                    context_size=args.llm_context_size,
+                ),
+                "llm",
+            )
+        except LLMRerankerUnavailable as exc:
+            print(f"warning: {exc}; falling back to mock reranker", file=sys.stderr)
+            return MockContextReranker(), "mock"
     try:
         return (
-            LLMLogitsReranker(
-                args.model_path,
-                llm_weight=args.llm_weight,
+            CrossEncoderReranker(
+                args.cross_encoder_model,
+                cross_encoder_weight=args.cross_encoder_weight,
                 viterbi_weight=args.viterbi_weight,
-                context_size=args.llm_context_size,
+                batch_size=args.cross_encoder_batch_size,
+                cache_dir=args.cross_encoder_cache_dir,
+                local_files_only=args.cross_encoder_local_files_only,
             ),
-            "llm",
+            "cross-encoder",
         )
-    except LLMRerankerUnavailable as exc:
+    except CrossEncoderRerankerUnavailable as exc:
         print(f"warning: {exc}; falling back to mock reranker", file=sys.stderr)
         return MockContextReranker(), "mock"
 
 
 def _human_report(report: dict[str, object]) -> str:
     suite = report["suite"]
+    model = (
+        f", model: {report['cross_encoder_model']}"
+        if report["reranker_effective"] == "cross-encoder"
+        else ""
+    )
     reranker = (
         f"Reranker: {report['reranker_effective']}"
-        f" (requested: {report['reranker_requested']})"
+        f" (requested: {report['reranker_requested']}{model})"
     )
     latency = (
         f"Candidate latency: {float(report['candidate_latency_ms']):.3f} ms"
@@ -170,11 +223,14 @@ def _human_report(report: dict[str, object]) -> str:
         mozc = report["mozc"]
         lines = (
             f"Handmade: {handmade['query_count']} cases, "
-            f"NDCG@{handmade['k']}={float(handmade['ndcg_at_k']):.6f}",
+            f"NDCG@{handmade['k']}={float(handmade['ndcg_at_k']):.6f}, "
+            f"MRR@{handmade['k']}={float(handmade['mrr_at_k']):.6f}, "
+            f"Top-1={float(handmade['top1_accuracy']):.6f}",
             f"AJIMEE: {ajimee['case_count']} cases, "
-            f"mean CER={float(ajimee['mean_cer']):.6f}",
-            f"Mozc: {mozc['passed_count']}/{mozc['evaluated_count']} passed, "
-            f"{mozc['skipped_count']} skipped",
+            f"mean CER={float(ajimee['mean_cer']):.6f}, "
+            f"exact={float(ajimee['exact_match_accuracy']):.6f}",
+            f"Mozc: {mozc['passed_count']}/{mozc['evaluated_count']} passed "
+            f"({float(mozc['pass_rate']):.6f}), {mozc['skipped_count']} skipped",
         )
     return "\n".join((reranker, *lines, latency))
 
@@ -219,6 +275,10 @@ def main(argv: list[str] | None = None) -> int:
             report = reports[args.suite]
         report["reranker_requested"] = args.reranker
         report["reranker_effective"] = effective_reranker
+        report["cross_encoder_model"] = (
+            args.cross_encoder_model if effective_reranker == "cross-encoder" else None
+        )
+        report["viterbi_weight"] = args.viterbi_weight
         report["candidate_latency_ms"] = measured_reranker.candidate_latency_ms
         report["scored_candidate_count"] = measured_reranker.candidate_count
     except (OSError, ValueError, TypeError) as exc:

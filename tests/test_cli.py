@@ -7,6 +7,10 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import pytest
+
+import beme.cli as beme_cli
+from beme.reranker import CrossEncoderRerankerUnavailable
 
 
 def write_dictionary(tmp_path: Path) -> Path:
@@ -158,3 +162,33 @@ def test_cli_llm_load_failure_falls_back_to_mock_without_traceback(tmp_path: Pat
     assert json.loads(process.stdout)["candidates"][0]["surface"] == "考証"
     assert "falling back to mock reranker" in process.stderr
     assert "traceback" not in process.stderr.lower()
+
+
+def test_cli_cross_encoder_load_failure_falls_back_without_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def unavailable(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise CrossEncoderRerankerUnavailable("model unavailable in test")
+
+    monkeypatch.setattr(beme_cli, "CrossEncoderReranker", unavailable)
+    return_code = beme_cli.main(
+        [
+            "convert",
+            "こうしょう",
+            "--dictionary",
+            str(write_dictionary(tmp_path)),
+            "--reranker",
+            "cross-encoder",
+            "--preceding-context",
+            "歴史資料を調べる",
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert return_code == 0
+    assert json.loads(captured.out)["candidates"][0]["surface"] == "考証"
+    assert "falling back to mock reranker" in captured.err

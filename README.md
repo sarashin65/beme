@@ -1,17 +1,17 @@
 # BeME — Beam + IME
 
-LLM と検索技術を活用する自作日本語 IME。ひらがな入力の K-best 候補生成と、前後の文脈を使うキーワードモック / Qwen2.5-0.5B logits リランカを実装しています。
+LLM と検索技術を活用する自作日本語 IME。ひらがな入力の K-best 候補生成と、前後の文脈を使うキーワードモック / Qwen2.5-0.5B logits / Cross-Encoder リランカを実装しています。
 
 ## 状態
 
-2026-08-21: Phase 2 のモデル組み込みに加え、評価データ拡充ステップ 1 を実装済み。
+2026-08-21: Phase 2 の Cross-Encoder 比較と評価データ拡充ステップ 1 まで実装済み。
 
 - 自作ミニ辞書: `data/dictionary.tsv`
 - BeME 手作り評価: 文脈なし 12 件、文脈付き 2 件を `data/evaluation_cases.jsonl` に維持
 - AJIMEE-Bench: 文章変換 200 件を `data/ajimee_bench_jwtd_v2_v1.json` に導入
 - Mozc quality regression: コーナーケース 500 件を `data/mozc_oss.tsv` に導入
-- 手作り 14 件のモック実測値: Top-1 `1.000000`、NDCG@5 `0.992972`
-- 手作り 14 件の LLM 実測値: Top-1 `0.928571`、NDCG@5 `0.966609`
+- 手作り 14 件の Top-1 / NDCG@5: mock `1.000000 / 0.992972`、LLM `0.928571 / 0.966609`
+- Cross-Encoder 2 モデルはいずれも手作り Top-1 `1.000000`。CPU レイテンシを含む比較から日本語特化モデルを既定値に採用
 
 手作り評価はケースと辞書を同時に作った小規模なベースラインであり、一般的な日本語 IME 品質を示しません。外部データは独立した品質測定と不足語彙・既知の誤変換の検出に使います。
 
@@ -21,12 +21,12 @@ LLM と検索技術を活用する自作日本語 IME。ひらがな入力の K-
 2. **ラティス構築**: 一致した辞書エントリを辺にし、一致がない位置には一文字の未知語辺を追加する。
 3. **K-best Viterbi**: 語コストと POS 遷移コストを加算し、各位置で上位 `beam_width` 経路を保持する。
 4. **候補整形**: 表記を一意化し、コスト、表記の順で決定的に並べる。
-5. **文脈リランク**: 前文・後方文字列がある場合、Phase 1 の全候補を選択した `Reranker`（`mock` / `llm`）で採点してから `top_k` 件に絞る。
+5. **文脈リランク**: 前文・後方文字列がある場合、Phase 1 の全候補を選択した `Reranker`（`mock` / `llm` / `cross-encoder`）で採点してから `top_k` 件に絞る。
 6. **確信度判定**: リランク前の第2候補と第1候補のコスト差を確信度とし、しきい値未満なら将来の LLM リランク対象にする。
 
 ## セットアップ
 
-Python 3.11 以上が必要です。`llama-cpp-python` は通常のランタイム依存です。
+Python 3.11 以上が必要です。`llama-cpp-python`、`sentence-transformers`、CPU 版 PyTorch は通常のランタイム依存です。
 
 ```sh
 python -m venv .venv
@@ -42,6 +42,8 @@ python -m pip install huggingface-hub
 python -c "import os; from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='QuantFactory/Qwen2.5-0.5B-GGUF', filename='Qwen2.5-0.5B.Q4_K_M.gguf', local_dir=os.path.expanduser('~/.cache/beme/models'))"
 ```
 
+Cross-Encoder は初回実行時に Hugging Face から取得し、リポジトリ外の `~/.cache/beme/cross-encoder/` に保存します。既定は日本語特化の `hotchpotch/japanese-reranker-base-v2`（MIT、Ruri v3 130M base）、比較対象は `BAAI/bge-reranker-v2-m3`（568M、多言語、Apache 2.0）です。
+
 ## 変換 CLI
 
 ```sh
@@ -53,6 +55,12 @@ python -m beme convert こうしょう --following-context "について商談�
 python -m beme convert こうしょう \
   --preceding-context "歴史を研究する" \
   --reranker llm \
+  --top-k 3
+
+python -m beme convert こうしょう \
+  --preceding-context "歴史を研究する" \
+  --reranker cross-encoder \
+  --cross-encoder-model hotchpotch/japanese-reranker-base-v2 \
   --top-k 3
 ```
 
@@ -76,10 +84,15 @@ needs_rerank: yes
 - `--dictionary`: 辞書 TSV。省略時は `data/dictionary.tsv`。
 - `--preceding-context`: 変換対象より前の確定済み文・入力履歴。既定値は空文字列。
 - `--following-context`: カーソルより後ろの文字列。既定値は空文字列。
-- `--reranker`: 文脈リランカ。`mock`（既定）または `llm`。
+- `--reranker`: 文脈リランカ。`mock`（既定）、`llm`、`cross-encoder`。
 - `--model-path`: LLM の GGUF。既定値は `~/.cache/beme/models/Qwen2.5-0.5B.Q4_K_M.gguf`。
-- `--llm-weight` / `--viterbi-weight`: 最終スコアの重み。両方の既定値は `1.0`。
+- `--llm-weight` / `--viterbi-weight`: LLM 最終スコアの重み。両方の既定値は `1.0`。`--viterbi-weight` は Cross-Encoder にも適用する。
 - `--llm-context-size`: llama.cpp のコンテキスト長。既定値は 256 トークン。
+- `--cross-encoder-model`: 上記 2 モデルから選択。既定は日本語特化モデル。
+- `--cross-encoder-cache-dir`: モデルキャッシュ。既定値は `~/.cache/beme/cross-encoder/`。
+- `--cross-encoder-weight`: Cross-Encoder の関連度重み。既定値は `1.0`。
+- `--cross-encoder-batch-size`: CPU 推論バッチサイズ。既定値は `8`。
+- `--cross-encoder-local-files-only`: キャッシュにないモデルをダウンロードせず、ロード失敗として扱う。
 - `--json`: 候補のトークン内訳を含む JSON を出力する。
 
 入力は空でないひらがなに限り、長音符 `ー` も許可します。不正な入力や辞書は CLI エラーになります。辞書 TSV のヘッダーは次のとおりです。
@@ -98,7 +111,17 @@ $$
 - w_\text{llm}\frac{1}{N}\sum_{i=1}^{N}\log P(t_i\mid \text{preceding},t_{<i})
 $$
 
-前文を一度プレフィルして `save_state()` し、候補ごとに `load_state()` して KV cache を復元します。後方文字列がある場合の評価トークン列は `candidate + following` です。コンテキスト上限を超える場合は後方文字列の末尾側、次に前文の先頭側を切り詰めます。モデルファイル欠落、`llama-cpp-python` import 失敗、モデルロード失敗時は警告を標準エラーへ出してモックへフォールバックします。
+前文を一度プレフィルして `save_state()` し、候補ごとに `load_state()` して KV cache を復元します。後方文字列がある場合の評価トークン列は `candidate + following` です。コンテキスト上限を超える場合は後方文字列の末尾側、次に前文の先頭側を切り詰めます。
+
+Cross-Encoder は `preceding + "【変換対象】" + following` を query、候補表記を passage として一括採点します。モデルの raw classification logit を関連度 $s_\text{CE}$ とし、次式で Viterbi コストと結合します。
+
+$$
+\text{score}
+:= w_\text{viterbi}\,\text{cost}
+- w_\text{CE}\,s_\text{CE}(\text{context},\text{candidate})
+$$
+
+小さいほど上位です。単語 1 件の passage では sigmoid 後の値が極小域に圧縮され、Viterbi コストとの結合で意味差が消えるため、単調変換前の raw logit を使います。LLM / Cross-Encoder とも、import、モデル欠落、初期化の失敗時は警告を標準エラーへ出してモックへフォールバックします。
 
 ## 精度評価
 
@@ -127,18 +150,35 @@ python scripts/evaluate.py --suite all --top-k 5
 # 機械可読出力（項目別結果を含む）
 python scripts/evaluate.py --suite all --reranker mock --json
 python scripts/evaluate.py --suite handmade --reranker llm --json
+python scripts/evaluate.py --suite all --reranker cross-encoder \
+  --cross-encoder-model BAAI/bge-reranker-v2-m3 --json
+python scripts/evaluate.py --suite all --reranker cross-encoder \
+  --cross-encoder-model hotchpotch/japanese-reranker-base-v2 --json
 ```
 
-レポートにはクエリ数、文脈付きケースを含む NDCG@k / MRR@k、Top-1 accuracy、カスケード対象率、実際の文脈リランク率、リランカの候補 1 件あたりレイテンシを出力します。レイテンシはモデルロードを除く各 `rerank()` 全体（共通文脈のプレフィルと状態保存を含む）を候補数で割った値です。NDCG はゲイン $2^{relevance}-1$ と `log2(rank + 1)` の割引を使い、MRR は最初の関連候補の逆順位です。`preceding_context` と `following_context` は任意で、省略時は空文字列として扱います。
+レポートにはクエリ数、文脈付きケースを含む NDCG@k / MRR@k、Top-1 accuracy、カスケード対象率、実際の文脈リランク率、リランカの候補 1 件あたりレイテンシを出力します。レイテンシはモデルロードを除く各 `rerank()` 全体を候補数で割った値です。NDCG はゲイン $2^{relevance}-1$ と `log2(rank + 1)` の割引を使い、MRR は最初の関連候補の逆順位です。`preceding_context` と `following_context` は任意で、省略時は空文字列として扱います。
 
-2026-08-21、Intel N100、CPU 版 llama.cpp、`top_k=5`、`beam_width=64`、コンテキスト長 256、文脈リランク対象 82 候補での 1 回の実測:
+2026-08-21、Intel N100、CPU、`top_k=5`、`beam_width=64`、LLM コンテキスト長 256、`--suite all`、文脈リランク対象 5,272 候補での各 1 回の実測です。モデルロード時間は除外しています。
 
-| リランカ | Top-1 | NDCG@5 | MRR@5 | 候補レイテンシ |
-|---|---:|---:|---:|---:|
-| mock | 1.000000 | 0.992972 | 1.000000 | 0.003 ms |
-| llm | 0.928571 | 0.966609 | 0.964286 | 150.891 ms |
+| リランカ | Handmade Top-1 | NDCG@5 | MRR@5 | AJIMEE CER | 平均編集距離 | 完全一致 | Mozc pass | 候補レイテンシ |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| mock | 1.000000 | 0.992972 | 1.000000 | 0.842278 | 17.725 | 0.010000 | 49/498 (0.098394) | 0.002 ms |
+| llm | 0.928571 | 0.966609 | 0.964286 | 0.842917 | 17.730 | 0.010000 | 49/498 (0.098394) | 325.754 ms |
+| BAAI/bge-reranker-v2-m3 | 1.000000 | 0.992972 | 1.000000 | **0.840914** | **17.700** | 0.010000 | 49/498 (0.098394) | 206.683 ms |
+| hotchpotch/japanese-reranker-base-v2 | 1.000000 | 0.992972 | 1.000000 | 0.841172 | 17.715 | 0.010000 | 49/498 (0.098394) | **48.668 ms** |
 
-このデータでは LLM はモックより精度・速度ともに劣ります。特に一般的な「交渉」を好む頻度バイアスが残るため、評価ケースの拡充と重み校正が必要です。
+Mozc には文脈がなく第2ランカーを実行しないため、4 方式の pass rate は同じです。BGE は AJIMEE の平均編集距離を日本語特化モデルより合計 3 文字だけ改善しましたが、候補レイテンシは 4.25 倍でした。日本語特化モデルは手作り精度と Mozc pass が BGE と同じで、LLM より 6.69 倍速いため、BeME の既定 Cross-Encoder に採用します。ただし 48.668 ms/候補は IME の候補群全体にはまだ遅く、実運用採用では候補数制限・量子化・ONNX 等の高速化が必要です。
+
+頻度バイアスを確認する文脈ケースの実順位:
+
+| 手法 | 「歴史資料の内容を調べる」 | 後方「について商談を進める」 |
+|---|---|---|
+| mock | 考証 > 交渉 > 高尚 | 交渉 > 高尚 > 校章 |
+| llm | **交渉** > 考証 > 鉱床（誤り） | 交渉 > 鉱床 > 考証 |
+| BGE | 考証 > 公章 > 交渉 | 交渉 > 工章 > 公商 |
+| 日本語特化 | 考証 > 校章 > 交渉 | 交渉 > 考証 > 工廠 |
+
+両 Cross-Encoder は「歴史→考証」を Top-1 にして、LLM logits の「交渉」頻度バイアスをこのケースでは回避しました。一方、2 位以下には `公章`・`工章` のような不自然なゼロショット順位が残り、辞書コストとの結合は引き続き必要です。
 
 ### 外部評価データと判定方法
 
@@ -159,14 +199,14 @@ python scripts/evaluate.py --suite handmade --reranker llm --json
 pytest -q
 ```
 
-辞書検証、ラティス接続、未知語フォールバック、複数分割、候補の一意性と決定性、確信度の境界、CLI、リランカ契約、前文・後方文脈による順位変更、文脈付き NDCG/MRR に加え、カタカナ→ひらがな入力アダプタ、句読点保持、Levenshtein/CER、Mozc の正例・禁止誤変換・順位・スキップ規則、導入データ件数（200/500）、手作り14件の維持をテストします。LLM 用テストは実モデルをロードせず、決定的な fake backend で平均尤度、線形結合、`save_state` / `load_state`、ロード失敗時のフォールバックを検証します。
+辞書検証、ラティス接続、未知語フォールバック、複数分割、候補の一意性と決定性、確信度の境界、CLI、リランカ契約、前文・後方文脈による順位変更、文脈付き NDCG/MRR に加え、カタカナ→ひらがな入力アダプタ、句読点保持、Levenshtein/CER、Mozc の正例・禁止誤変換・順位・スキップ規則、導入データ件数（200/500）、手作り14件の維持をテストします。LLM / Cross-Encoder 用テストは実モデルをロードせず、決定的な fake backend で尤度・関連度と Viterbi コストの結合、バッチ入力、`save_state` / `load_state`、ロード失敗時のフォールバックを検証します。
 
 ## 制約と今後
 
 - 辞書は本番用の MeCab/IPADIC ではなく、小規模な自作データです。
 - キーワードモックは小規模評価データに合わせた手作りルールです。
-- 0.5B Q4_K_M でも N100 CPU 上の候補レイテンシは約 151 ms であり、目標の数十 ms を満たしません。
+- N100 CPU 上の候補レイテンシは日本語 Cross-Encoder でも約 49 ms、BGE は約 207 ms、0.5B LLM は約 326 ms であり、候補群全体を採点する実用レイテンシを満たしません。
 - ビーム幅が小さすぎると、有望な経路を途中で枝刈りする可能性があります。
-- 確信度しきい値 2.0 と LLM/Viterbi 重み 1.0 は初期値です。今後は独立したホールドアウトデータで調整します。
+- 確信度しきい値 2.0、LLM/Viterbi/Cross-Encoder 重み 1.0 は初期値です。今後は独立したホールドアウトデータで調整します。
 
 詳細な要件と Phase 1・Phase 2 の設計判断は `docs/spec.md` を参照してください。

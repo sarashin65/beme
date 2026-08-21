@@ -11,11 +11,18 @@ from typing import Sequence
 
 from .converter import Converter, ConversionResult
 from .reranker import (
+    DEFAULT_CROSS_ENCODER_BATCH_SIZE,
+    DEFAULT_CROSS_ENCODER_CACHE_DIR,
+    DEFAULT_CROSS_ENCODER_MODEL,
+    DEFAULT_CROSS_ENCODER_WEIGHT,
     DEFAULT_LLM_CONTEXT_SIZE,
     DEFAULT_LLM_MODEL_PATH,
     DEFAULT_LLM_WEIGHT,
     DEFAULT_VITERBI_WEIGHT,
+    SUPPORTED_CROSS_ENCODER_MODELS,
     ConversionContext,
+    CrossEncoderReranker,
+    CrossEncoderRerankerUnavailable,
     LLMLogitsReranker,
     LLMRerankerUnavailable,
     MockContextReranker,
@@ -77,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     convert.add_argument(
         "--reranker",
-        choices=("mock", "llm"),
+        choices=("mock", "llm", "cross-encoder"),
         default="mock",
         help="context reranker backend (default: mock)",
     )
@@ -105,6 +112,35 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_LLM_CONTEXT_SIZE,
         help=f"llama.cpp context token limit (default: {DEFAULT_LLM_CONTEXT_SIZE})",
     )
+    convert.add_argument(
+        "--cross-encoder-model",
+        choices=SUPPORTED_CROSS_ENCODER_MODELS,
+        default=DEFAULT_CROSS_ENCODER_MODEL,
+        help=f"model for --reranker cross-encoder (default: {DEFAULT_CROSS_ENCODER_MODEL})",
+    )
+    convert.add_argument(
+        "--cross-encoder-cache-dir",
+        type=Path,
+        default=DEFAULT_CROSS_ENCODER_CACHE_DIR,
+        help=f"repo-external model cache (default: {DEFAULT_CROSS_ENCODER_CACHE_DIR})",
+    )
+    convert.add_argument(
+        "--cross-encoder-weight",
+        type=_non_negative_float,
+        default=DEFAULT_CROSS_ENCODER_WEIGHT,
+        help=f"semantic relevance weight (default: {DEFAULT_CROSS_ENCODER_WEIGHT:g})",
+    )
+    convert.add_argument(
+        "--cross-encoder-batch-size",
+        type=_positive_int,
+        default=DEFAULT_CROSS_ENCODER_BATCH_SIZE,
+        help=f"CPU inference batch size (default: {DEFAULT_CROSS_ENCODER_BATCH_SIZE})",
+    )
+    convert.add_argument(
+        "--cross-encoder-local-files-only",
+        action="store_true",
+        help="do not download a missing Cross-Encoder model",
+    )
     convert.add_argument("--json", action="store_true", help="emit one JSON object")
     return parser
 
@@ -112,14 +148,27 @@ def build_parser() -> argparse.ArgumentParser:
 def _build_reranker(args: argparse.Namespace) -> Reranker:
     if args.reranker == "mock":
         return MockContextReranker()
+    if args.reranker == "llm":
+        try:
+            return LLMLogitsReranker(
+                args.model_path,
+                llm_weight=args.llm_weight,
+                viterbi_weight=args.viterbi_weight,
+                context_size=args.llm_context_size,
+            )
+        except LLMRerankerUnavailable as exc:
+            print(f"warning: {exc}; falling back to mock reranker", file=sys.stderr)
+            return MockContextReranker()
     try:
-        return LLMLogitsReranker(
-            args.model_path,
-            llm_weight=args.llm_weight,
+        return CrossEncoderReranker(
+            args.cross_encoder_model,
+            cross_encoder_weight=args.cross_encoder_weight,
             viterbi_weight=args.viterbi_weight,
-            context_size=args.llm_context_size,
+            batch_size=args.cross_encoder_batch_size,
+            cache_dir=args.cross_encoder_cache_dir,
+            local_files_only=args.cross_encoder_local_files_only,
         )
-    except LLMRerankerUnavailable as exc:
+    except CrossEncoderRerankerUnavailable as exc:
         print(f"warning: {exc}; falling back to mock reranker", file=sys.stderr)
         return MockContextReranker()
 

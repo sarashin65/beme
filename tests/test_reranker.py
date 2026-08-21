@@ -10,6 +10,7 @@ import pytest
 from beme.converter import Converter
 from beme.reranker import (
     ConversionContext,
+    CrossEncoderReranker,
     LLMLogitsReranker,
     LLMRerankerUnavailable,
     MockContextReranker,
@@ -75,6 +76,74 @@ def test_mock_reranker_supports_injected_keyword_lexicon(tmp_path: Path) -> None
     assert result.candidates[0].surface == "校章"
     assert result.candidates[0].score == pytest.approx(-1.5)
 
+
+
+class FakeCrossEncoder:
+    """Deterministic pair scorer; no model files or ML runtime used."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[tuple[str, str], ...], int]] = []
+
+    def predict(
+        self,
+        sentences: tuple[tuple[str, str], ...],
+        *,
+        batch_size: int,
+        show_progress_bar: bool,
+        convert_to_numpy: bool,
+    ) -> list[float]:
+        assert show_progress_bar is False
+        assert convert_to_numpy is True
+        self.calls.append((sentences, batch_size))
+        relevance = {"交渉": 0.1, "考証": 0.9, "校章": 0.2}
+        return [relevance[passage] for _, passage in sentences]
+
+
+def test_cross_encoder_batches_context_pairs_and_combines_viterbi_cost(tmp_path: Path) -> None:
+    model = FakeCrossEncoder()
+    reranker = CrossEncoderReranker(
+        "test/cross-encoder",
+        model=model,
+        batch_size=2,
+        cross_encoder_weight=1.0,
+        viterbi_weight=1.0,
+        cache_dir=tmp_path / "model-cache",
+    )
+    converter = Converter.from_tsv(write_dictionary(tmp_path), reranker=reranker)
+
+    result = converter.convert(
+        "こうしょう",
+        k=3,
+        context=ConversionContext(preceding="歴史資料を調べる"),
+    )
+
+    assert [candidate.surface for candidate in result.candidates] == ["考証", "交渉", "校章"]
+    assert result.candidates[0].score == pytest.approx(-0.5)
+    pairs, batch_size = model.calls[0]
+    assert pairs == (
+        ("歴史資料を調べる【変換対象】", "交渉"),
+        ("歴史資料を調べる【変換対象】", "考証"),
+        ("歴史資料を調べる【変換対象】", "校章"),
+    )
+    assert batch_size == 2
+    assert reranker.scored_candidate_count == 3
+    assert reranker.mean_candidate_latency_ms is not None
+
+
+def test_cross_encoder_rejects_missing_or_non_finite_scores(tmp_path: Path) -> None:
+    class BrokenCrossEncoder(FakeCrossEncoder):
+        def predict(self, *args: object, **kwargs: object) -> list[float]:
+            del args, kwargs
+            return [float("nan")]
+
+    reranker = CrossEncoderReranker(model=BrokenCrossEncoder(), cache_dir=tmp_path)
+    converter = Converter.from_tsv(write_dictionary(tmp_path), reranker=reranker)
+
+    with pytest.raises(ValueError, match="non-finite"):
+        converter.convert(
+            "こうしょう",
+            context=ConversionContext(preceding="歴史資料を調べる"),
+        )
 
 def test_context_rejects_non_string_fields() -> None:
     with pytest.raises(TypeError, match="preceding context"):

@@ -13,6 +13,8 @@ from .lattice import (
 )
 from .reranker import (
     ConversionContext,
+    CrossEncoderReranker,
+    CrossEncoderRerankerUnavailable,
     LLMLogitsReranker,
     LLMRerankerUnavailable,
     MockContextReranker,
@@ -25,6 +27,8 @@ __all__ = [
     "Candidate",
     "ConversionResult",
     "ConversionContext",
+    "CrossEncoderReranker",
+    "CrossEncoderRerankerUnavailable",
     "Converter",
     "Dictionary",
     "DictionaryEntry",

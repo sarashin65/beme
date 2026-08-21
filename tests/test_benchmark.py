@@ -173,3 +173,37 @@ def test_evaluation_cli_runs_ajimee_suite(tmp_path: Path) -> None:
     assert report["suite"] == "ajimee"
     assert report["mean_cer"] == 0.0
     assert report["exact_match_accuracy"] == 1.0
+
+
+
+def test_evaluation_cli_reports_cross_encoder_fallback_without_model(tmp_path: Path) -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(REPOSITORY_ROOT / "src"), env.get("PYTHONPATH", "")) if part
+    )
+    process = subprocess.run(
+        [
+            sys.executable,
+            str(REPOSITORY_ROOT / "scripts" / "evaluate.py"),
+            "--suite",
+            "handmade",
+            "--reranker",
+            "cross-encoder",
+            "--cross-encoder-cache-dir",
+            str(tmp_path / "empty-cache"),
+            "--cross-encoder-local-files-only",
+            "--json",
+        ],
+        cwd=REPOSITORY_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    report = json.loads(process.stdout)
+
+    assert process.returncode == 0, process.stderr
+    assert report["reranker_requested"] == "cross-encoder"
+    assert report["reranker_effective"] == "mock"
+    assert report["cross_encoder_model"] is None
+    assert "falling back to mock reranker" in process.stderr

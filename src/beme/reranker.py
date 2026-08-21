@@ -49,12 +49,33 @@ class LLMRerankerUnavailable(RuntimeError):
     """Raised when the local llama.cpp reranker cannot be loaded."""
 
 
+class CrossEncoderRerankerUnavailable(RuntimeError):
+    """Raised when the sentence-transformers reranker cannot be loaded."""
+
+
 DEFAULT_LLM_MODEL_PATH = (
     Path.home() / ".cache" / "beme" / "models" / "Qwen2.5-0.5B.Q4_K_M.gguf"
 )
 DEFAULT_LLM_WEIGHT = 1.0
 DEFAULT_VITERBI_WEIGHT = 1.0
 DEFAULT_LLM_CONTEXT_SIZE = 256
+SUPPORTED_CROSS_ENCODER_MODELS = (
+    "BAAI/bge-reranker-v2-m3",
+    "hotchpotch/japanese-reranker-base-v2",
+)
+DEFAULT_CROSS_ENCODER_MODEL = SUPPORTED_CROSS_ENCODER_MODELS[1]
+DEFAULT_CROSS_ENCODER_CACHE_DIR = Path.home() / ".cache" / "beme" / "cross-encoder"
+DEFAULT_CROSS_ENCODER_WEIGHT = 1.0
+DEFAULT_CROSS_ENCODER_BATCH_SIZE = 8
+
+
+def _non_negative_weight(name: str, value: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be a number")
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized < 0:
+        raise ValueError(f"{name} must be finite and non-negative")
+    return normalized
 
 
 class _LlamaBackend(Protocol):
@@ -78,6 +99,19 @@ class _LlamaBackend(Protocol):
     def load_state(self, state: Any) -> None: ...
 
     def logits_to_logprobs(self, logits: Any, axis: int = -1) -> Any: ...
+
+
+class _CrossEncoderBackend(Protocol):
+    """Small sentence-transformers surface used by tests and the reranker."""
+
+    def predict(
+        self,
+        sentences: Sequence[tuple[str, str]],
+        *,
+        batch_size: int,
+        show_progress_bar: bool,
+        convert_to_numpy: bool,
+    ) -> Any: ...
 
 
 _DEFAULT_CONTEXT_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -144,6 +178,130 @@ class MockContextReranker:
         return tuple(sorted(scored, key=lambda candidate: (candidate.score, candidate.cost, candidate.surface)))
 
 
+class CrossEncoderReranker:
+    """Rank candidates by semantic relevance to their surrounding context.
+
+    The context with a visible conversion slot is the query and each candidate
+    surface is the passage.  ``CrossEncoder.predict`` batches all candidate
+    pairs.  Its relevance score is negated because the BeME reranker contract
+    orders lower scores first, then combined with the Phase 1 Viterbi cost.
+    """
+
+    def __init__(
+        self,
+        model_name: str = DEFAULT_CROSS_ENCODER_MODEL,
+        *,
+        cross_encoder_weight: float = DEFAULT_CROSS_ENCODER_WEIGHT,
+        viterbi_weight: float = DEFAULT_VITERBI_WEIGHT,
+        batch_size: int = DEFAULT_CROSS_ENCODER_BATCH_SIZE,
+        cache_dir: str | Path = DEFAULT_CROSS_ENCODER_CACHE_DIR,
+        local_files_only: bool = False,
+        model: _CrossEncoderBackend | None = None,
+    ) -> None:
+        if not isinstance(model_name, str) or not model_name:
+            raise ValueError("model_name must be a non-empty string")
+        self.cross_encoder_weight = _non_negative_weight(
+            "cross_encoder_weight", cross_encoder_weight
+        )
+        self.viterbi_weight = _non_negative_weight("viterbi_weight", viterbi_weight)
+        if self.cross_encoder_weight == 0 and self.viterbi_weight == 0:
+            raise ValueError("at least one reranker weight must be positive")
+        if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
+        if not isinstance(local_files_only, bool):
+            raise TypeError("local_files_only must be a bool")
+        self.model_name = model_name
+        self.batch_size = batch_size
+        self.cache_dir = Path(cache_dir).expanduser()
+        self.local_files_only = local_files_only
+        self._model = model if model is not None else self._load_model()
+        self._lock = Lock()
+        self.total_rerank_seconds = 0.0
+        self.scored_candidate_count = 0
+
+    def _load_model(self) -> _CrossEncoderBackend:
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            from sentence_transformers import CrossEncoder
+            from torch.nn import Identity
+
+            return CrossEncoder(
+                self.model_name,
+                device="cpu",
+                cache_folder=str(self.cache_dir),
+                local_files_only=self.local_files_only,
+                activation_fn=Identity(),
+            )
+        except Exception as exc:
+            raise CrossEncoderRerankerUnavailable(
+                f"failed to load Cross-Encoder model {self.model_name}: {exc}"
+            ) from exc
+
+    @property
+    def mean_candidate_latency_ms(self) -> float | None:
+        """Return cumulative end-to-end model latency per scored candidate."""
+
+        if not self.scored_candidate_count:
+            return None
+        return self.total_rerank_seconds * 1000.0 / self.scored_candidate_count
+
+    @staticmethod
+    def _context_text(context: ConversionContext) -> str:
+        return f"{context.preceding}【変換対象】{context.following}"
+
+    @staticmethod
+    def _finite_score(value: Any) -> float:
+        if hasattr(value, "item"):
+            value = value.item()
+        try:
+            score = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Cross-Encoder produced a non-numeric relevance score") from exc
+        if not math.isfinite(score):
+            raise ValueError("Cross-Encoder produced a non-finite relevance score")
+        return score
+
+    def rerank(
+        self,
+        candidates: Sequence[Candidate],
+        context: ConversionContext,
+    ) -> tuple[Candidate, ...]:
+        if not isinstance(context, ConversionContext):
+            raise TypeError("context must be a ConversionContext")
+        materialized = tuple(candidates)
+        if not materialized:
+            return ()
+
+        query = self._context_text(context)
+        pairs = tuple((query, candidate.surface) for candidate in materialized)
+        with self._lock:
+            started = perf_counter()
+            raw_scores = self._model.predict(
+                pairs,
+                batch_size=self.batch_size,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            )
+            self.total_rerank_seconds += perf_counter() - started
+            relevance_scores = tuple(self._finite_score(value) for value in raw_scores)
+            if len(relevance_scores) != len(materialized):
+                raise ValueError("Cross-Encoder must return one relevance score per candidate")
+            scored = tuple(
+                replace(
+                    candidate,
+                    score=(
+                        self.viterbi_weight * candidate.cost
+                        - self.cross_encoder_weight * relevance
+                    ),
+                )
+                for candidate, relevance in zip(materialized, relevance_scores, strict=True)
+            )
+            self.scored_candidate_count += len(scored)
+        return tuple(
+            sorted(scored, key=lambda candidate: (candidate.score, candidate.cost, candidate.surface))
+        )
+
+
 class LLMLogitsReranker:
     """Rank candidates by Qwen continuation likelihood plus Viterbi cost.
 
@@ -163,8 +321,8 @@ class LLMLogitsReranker:
         context_size: int = DEFAULT_LLM_CONTEXT_SIZE,
         model: _LlamaBackend | None = None,
     ) -> None:
-        self.llm_weight = self._weight("llm_weight", llm_weight)
-        self.viterbi_weight = self._weight("viterbi_weight", viterbi_weight)
+        self.llm_weight = _non_negative_weight("llm_weight", llm_weight)
+        self.viterbi_weight = _non_negative_weight("viterbi_weight", viterbi_weight)
         if self.llm_weight == 0 and self.viterbi_weight == 0:
             raise ValueError("at least one reranker weight must be positive")
         if isinstance(context_size, bool) or not isinstance(context_size, int) or context_size < 2:
@@ -176,14 +334,6 @@ class LLMLogitsReranker:
         self.total_rerank_seconds = 0.0
         self.scored_candidate_count = 0
 
-    @staticmethod
-    def _weight(name: str, value: float) -> float:
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise TypeError(f"{name} must be a number")
-        normalized = float(value)
-        if not math.isfinite(normalized) or normalized < 0:
-            raise ValueError(f"{name} must be finite and non-negative")
-        return normalized
 
     def _load_model(self) -> _LlamaBackend:
         if not self.model_path.is_file():
@@ -292,6 +442,12 @@ class LLMLogitsReranker:
 
 __all__ = [
     "ConversionContext",
+    "CrossEncoderReranker",
+    "CrossEncoderRerankerUnavailable",
+    "DEFAULT_CROSS_ENCODER_BATCH_SIZE",
+    "DEFAULT_CROSS_ENCODER_CACHE_DIR",
+    "DEFAULT_CROSS_ENCODER_MODEL",
+    "DEFAULT_CROSS_ENCODER_WEIGHT",
     "DEFAULT_LLM_CONTEXT_SIZE",
     "DEFAULT_LLM_MODEL_PATH",
     "DEFAULT_LLM_WEIGHT",
@@ -300,4 +456,5 @@ __all__ = [
     "LLMRerankerUnavailable",
     "MockContextReranker",
     "Reranker",
+    "SUPPORTED_CROSS_ENCODER_MODELS",
 ]
