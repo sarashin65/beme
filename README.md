@@ -4,16 +4,16 @@ LLM と検索技術を活用する自作日本語 IME。ひらがな入力の K-
 
 ## 状態
 
-2026-08-21: Phase 2 の Cross-Encoder 比較と評価データ拡充ステップ 1 まで実装済み。
+2026-08-21: 評価データ拡充ステップ 1 と辞書拡充 B（MeCab IPADIC 取り込み）まで実装済み。
 
-- 自作ミニ辞書: `data/dictionary.tsv`
+- 既定辞書: IPADIC 由来 349,043 エントリを `data/dictionary.tsv` に同梱
+- 手作り優先語: 133 エントリを `data/dictionary_manual.tsv` に維持し、生成時に上書き
 - BeME 手作り評価: 文脈なし 12 件、文脈付き 2 件を `data/evaluation_cases.jsonl` に維持
 - AJIMEE-Bench: 文章変換 200 件を `data/ajimee_bench_jwtd_v2_v1.json` に導入
 - Mozc quality regression: コーナーケース 500 件を `data/mozc_oss.tsv` に導入
-- 手作り 14 件の Top-1 / NDCG@5: mock `1.000000 / 0.992972`、LLM `0.928571 / 0.966609`
-- Cross-Encoder 2 モデルはいずれも手作り Top-1 `1.000000`。CPU レイテンシを含む比較から日本語特化モデルを既定値に採用
+- 拡充後 mock: 手作り Top-1 / NDCG@5 は `1.000000 / 0.992972` を維持、AJIMEE CER は `0.842278` から `0.341433`、Mozc pass は `49/498` から `81/498` へ改善
 
-手作り評価はケースと辞書を同時に作った小規模なベースラインであり、一般的な日本語 IME 品質を示しません。外部データは独立した品質測定と不足語彙・既知の誤変換の検出に使います。
+手作り評価は優先語と同時に作った小規模な回帰セットであり、一般的な日本語 IME 品質を単独では示しません。外部データは独立した文章精度と不足語彙・既知の誤変換の検出に使います。
 
 ## アーキテクチャ
 
@@ -103,6 +103,20 @@ reading<TAB>surface<TAB>pos<TAB>cost
 
 `cost` は有限の非負数です。
 
+## 辞書の再生成
+
+MeCab / IPADIC の検証環境は開発依存として導入します。コンパイル済み辞書ではなく、固定した IPADIC 原典 CSV を `scripts/build_ipadic_dictionary.py` で変換します。
+
+```sh
+uv sync --group dev
+curl -fLO https://deb.debian.org/debian/pool/main/m/mecab-ipadic/mecab-ipadic_2.7.0-20070801+main.orig.tar.gz
+python scripts/build_ipadic_dictionary.py \
+  mecab-ipadic_2.7.0-20070801+main.orig.tar.gz \
+  --expect-sha256 b62f527d881c504576baed9c6ef6561554658b175ce6ae0096a60307e49e3523
+```
+
+スクリプトはカタカナ読みをひらがなへ変換し、階層 POS を BeME の POS へ集約し、IPADIC 単語コストを `1.75..5.25` へ線形写像します。`data/dictionary_manual.tsv` のコスト上限 `1.65` より取り込み語の下限を高くして、既存の同音異義語順位を維持します。固定ソース、SHA-256、全変換規則、サイズ・メモリ実測、ライセンスは [`data/README.md`](data/README.md) を参照してください。
+
 LLM の最終スコア（小さいほど上位）は次式です。
 
 $$
@@ -158,7 +172,7 @@ python scripts/evaluate.py --suite all --reranker cross-encoder \
 
 レポートにはクエリ数、文脈付きケースを含む NDCG@k / MRR@k、Top-1 accuracy、カスケード対象率、実際の文脈リランク率、リランカの候補 1 件あたりレイテンシを出力します。レイテンシはモデルロードを除く各 `rerank()` 全体を候補数で割った値です。NDCG はゲイン $2^{relevance}-1$ と `log2(rank + 1)` の割引を使い、MRR は最初の関連候補の逆順位です。`preceding_context` と `following_context` は任意で、省略時は空文字列として扱います。
 
-2026-08-21、Intel N100、CPU、`top_k=5`、`beam_width=64`、LLM コンテキスト長 256、`--suite all`、文脈リランク対象 5,272 候補での各 1 回の実測です。モデルロード時間は除外しています。
+2026-08-21、辞書拡充前の自作ミニ辞書、Intel N100、CPU、`top_k=5`、`beam_width=64`、LLM コンテキスト長 256、`--suite all`、文脈リランク対象 5,272 候補での各 1 回の実測です。モデルロード時間は除外しています。
 
 | リランカ | Handmade Top-1 | NDCG@5 | MRR@5 | AJIMEE CER | 平均編集距離 | 完全一致 | Mozc pass | 候補レイテンシ |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -168,6 +182,17 @@ python scripts/evaluate.py --suite all --reranker cross-encoder \
 | hotchpotch/japanese-reranker-base-v2 | 1.000000 | 0.992972 | 1.000000 | 0.841172 | 17.715 | 0.010000 | 49/498 (0.098394) | **48.668 ms** |
 
 Mozc には文脈がなく第2ランカーを実行しないため、4 方式の pass rate は同じです。BGE は AJIMEE の平均編集距離を日本語特化モデルより合計 3 文字だけ改善しましたが、候補レイテンシは 4.25 倍でした。日本語特化モデルは手作り精度と Mozc pass が BGE と同じで、LLM より 6.69 倍速いため、BeME の既定 Cross-Encoder に採用します。ただし 48.668 ms/候補は IME の候補群全体にはまだ遅く、実運用採用では候補数制限・量子化・ONNX 等の高速化が必要です。
+
+### IPADIC 辞書拡充の前後比較（mock）
+
+同日、同じ `top_k=5`、`beam_width=64`、`--suite all --reranker mock` で再測定しました。手作り 14 件の順位品質を変えず、AJIMEE の macro CER は `0.500845`（59.46%）低下し、Mozc は 32 ケース、pass rate は 6.43 percentage points 改善しました。
+
+| 辞書 | エントリ | Handmade Top-1 | NDCG@5 | MRR@5 | AJIMEE CER | 完全一致 | Mozc pass |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 拡充前・自作ミニ | 133 | 1.000000 | 0.992972 | 1.000000 | 0.842278 | 0.010000 | 49/498 (0.098394) |
+| 拡充後・IPADIC + 手作り優先語 | 349,043 | 1.000000 | 0.992972 | 1.000000 | **0.341433** | **0.060000** | **81/498 (0.162651)** |
+
+「きしゃ」は `記者 > 汽車 > 帰社`、履歴文脈付き「こうしょう」は `考証 > 交渉 > 高尚`、商談の後方文脈付きでは `交渉 > 高尚 > 校章` を維持しました。全手作りケースの Top-1 `1.0` が優先語保護の回帰判定です。
 
 頻度バイアスを確認する文脈ケースの実順位:
 
@@ -192,6 +217,7 @@ Mozc には文脈がなく第2ランカーを実行しないため、4 方式の
 
 - AJIMEE-Bench `JWTD_v2/v1`: **CC BY-SA 3.0**。依頼時資料の MIT 記載とは異なり、upstream README がデータは元データに準拠して CC BY-SA 3.0 と明記しています。帰属: azooKey/AJIMEE-Bench contributors および日本語 Wikipedia 入力誤りデータセット v2。`data/licenses/AJIMEE-BENCH-CC-BY-SA-3.0.txt` を参照。
 - Mozc `oss.tsv`: **BSD 3-Clause**、Copyright 2010-2018 Google Inc. `data/licenses/MOZC-BSD-3-Clause.txt` に著作権表示、条件、免責条項を収録。
+- MeCab IPADIC 由来 `dictionary.tsv`: NAIST / ICOT の IPADIC ライセンス。固定ソースと変換規則は `data/README.md`、著作権表示・再配布条件・無保証条項は `data/licenses/IPADIC.txt` を参照。
 
 ## テスト
 
@@ -199,11 +225,11 @@ Mozc には文脈がなく第2ランカーを実行しないため、4 方式の
 pytest -q
 ```
 
-辞書検証、ラティス接続、未知語フォールバック、複数分割、候補の一意性と決定性、確信度の境界、CLI、リランカ契約、前文・後方文脈による順位変更、文脈付き NDCG/MRR に加え、カタカナ→ひらがな入力アダプタ、句読点保持、Levenshtein/CER、Mozc の正例・禁止誤変換・順位・スキップ規則、導入データ件数（200/500）、手作り14件の維持をテストします。LLM / Cross-Encoder 用テストは実モデルをロードせず、決定的な fake backend で尤度・関連度と Viterbi コストの結合、バッチ入力、`save_state` / `load_state`、ロード失敗時のフォールバックを検証します。
+辞書検証、ラティス接続、未知語フォールバック、複数分割、候補の一意性と決定性、確信度の境界、CLI、リランカ契約、前文・後方文脈による順位変更、文脈付き NDCG/MRR に加え、IPADIC の読み・POS・コスト変換、重複排除、記号・不正読み除外、手作り優先語の上書き、カタカナ→ひらがな入力アダプタ、句読点保持、Levenshtein/CER、Mozc の正例・禁止誤変換・順位・スキップ規則、導入データ件数（200/500）、手作り14件の維持をテストします。LLM / Cross-Encoder 用テストは実モデルをロードせず、決定的な fake backend で尤度・関連度と Viterbi コストの結合、バッチ入力、`save_state` / `load_state`、ロード失敗時のフォールバックを検証します。
 
 ## 制約と今後
 
-- 辞書は本番用の MeCab/IPADIC ではなく、小規模な自作データです。
+- 既定辞書は IPADIC の活用形・固有名詞を含む 349,043 エントリです。NEologd の新語や接続コスト行列は未導入で、TSV ロード時の最大 RSS はクリーンな CLI 実測で約 156 MiB です。
 - キーワードモックは小規模評価データに合わせた手作りルールです。
 - N100 CPU 上の候補レイテンシは日本語 Cross-Encoder でも約 49 ms、BGE は約 207 ms、0.5B LLM は約 326 ms であり、候補群全体を採点する実用レイテンシを満たしません。
 - ビーム幅が小さすぎると、有望な経路を途中で枝刈りする可能性があります。

@@ -1,12 +1,14 @@
-"""Small, deterministic dictionary and prefix index for BeME."""
+"""Deterministic BeME dictionary and memory-conscious exact-reading index."""
 
 from __future__ import annotations
 
 import csv
 import math
+import sys
+from bisect import bisect_left
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable
 
 
 _REQUIRED_COLUMNS = ("reading", "surface", "pos", "cost")
@@ -28,66 +30,25 @@ class DictionaryEntry:
     cost: float
 
 
-class _TrieNode:
-    __slots__ = ("children", "entries")
-
-    def __init__(self) -> None:
-        self.children: dict[str, _TrieNode] = {}
-        self.entries: list[DictionaryEntry] = []
-
 
 class Dictionary:
-    """An immutable entry collection backed by a first-character/prefix trie."""
+    """An immutable entry collection backed by an exact-reading index."""
 
     def __init__(self, entries: Iterable[DictionaryEntry]) -> None:
-        ordered = sorted(
-            tuple(entries),
-            key=lambda entry: (entry.reading, entry.cost, entry.surface, entry.pos),
+        ordered = tuple(
+            sorted(
+                entries,
+                key=lambda entry: (entry.reading, entry.cost, entry.surface, entry.pos),
+            )
         )
         self.entries: tuple[DictionaryEntry, ...] = ordered
-        self.first_char_index: Mapping[str, tuple[DictionaryEntry, ...]] = {
-            first: tuple(
-                sorted(
-                    values,
-                    key=lambda entry: (len(entry.reading), entry.cost, entry.surface, entry.pos),
-                )
-            )
-            for first, values in self._group_by_first(ordered).items()
+        grouped: dict[str, list[DictionaryEntry]] = {}
+        for entry in ordered:
+            grouped.setdefault(entry.reading, []).append(entry)
+        self._entries_by_reading: dict[str, tuple[DictionaryEntry, ...]] = {
+            reading: tuple(values) for reading, values in grouped.items()
         }
-
-        root = _TrieNode()
-        for entry in ordered:
-            node = root
-            for char in entry.reading:
-                node = node.children.setdefault(char, _TrieNode())
-            node.entries.append(entry)
-        self._root = root
-
-        # This public view is useful for diagnostics and keeps prefix lookup
-        # explicit, while matches_at traverses the trie without making copies.
-        prefix_values: dict[str, list[DictionaryEntry]] = {}
-        for entry in ordered:
-            for end in range(1, len(entry.reading) + 1):
-                prefix_values.setdefault(entry.reading[:end], []).append(entry)
-        self.prefix_index: Mapping[str, tuple[DictionaryEntry, ...]] = {
-            prefix: tuple(
-                sorted(values, key=lambda entry: (entry.reading, entry.cost, entry.surface, entry.pos))
-            )
-            for prefix, values in prefix_values.items()
-        }
-        self.by_first_char = self.first_char_index
-        self.by_prefix = self.prefix_index
-        self._entries_by_reading: dict[str, tuple[DictionaryEntry, ...]] = {}
-        for entry in ordered:
-            self._entries_by_reading.setdefault(entry.reading, tuple())
-            self._entries_by_reading[entry.reading] = self._entries_by_reading[entry.reading] + (entry,)
-
-    @staticmethod
-    def _group_by_first(entries: Iterable[DictionaryEntry]) -> dict[str, list[DictionaryEntry]]:
-        groups: dict[str, list[DictionaryEntry]] = {}
-        for entry in entries:
-            groups.setdefault(entry.reading[0], []).append(entry)
-        return groups
+        self._readings = tuple(self._entries_by_reading)
 
     @classmethod
     def from_tsv(cls, path: str | Path) -> "Dictionary":
@@ -155,7 +116,14 @@ class Dictionary:
                     raise ValueError(
                         f"{source}: line {line_number}: cost must be a finite non-negative number, got {raw_cost!r}"
                     )
-                entries.append(DictionaryEntry(reading, surface, pos, cost))
+                entries.append(
+                    DictionaryEntry(
+                        sys.intern(reading),
+                        sys.intern(surface),
+                        sys.intern(pos),
+                        cost,
+                    )
+                )
 
         if not entries:
             raise ValueError(f"{source}: no dictionary entries found")
@@ -171,28 +139,32 @@ class Dictionary:
     def entries_with_prefix(self, prefix: str) -> tuple[DictionaryEntry, ...]:
         """Return entries whose readings start with *prefix*."""
 
-        return self.prefix_index.get(prefix, tuple())
+        if not prefix:
+            return tuple()
+        index = bisect_left(self._readings, prefix)
+        matches: list[DictionaryEntry] = []
+        while index < len(self._readings):
+            reading = self._readings[index]
+            if not reading.startswith(prefix):
+                break
+            matches.extend(self._entries_by_reading[reading])
+            index += 1
+        return tuple(matches)
 
     def matches_at(self, reading: str, position: int) -> tuple[DictionaryEntry, ...]:
         """Return dictionary entries beginning at an input position.
 
-        The trie stops as soon as the input ceases to match, avoiding a scan of
-        unrelated readings.
+        Input strings are short, so probing their possible end positions against
+        the exact-reading index is both faster and substantially smaller than a
+        per-character Python trie for a 350k-entry IPADIC dictionary.
         """
 
         if position < 0 or position >= len(reading):
             return tuple()
-        node = self._root
         matches: list[DictionaryEntry] = []
-        for char in reading[position:]:
-            node = node.children.get(char)
-            if node is None:
-                break
-            if node.entries:
-                matches.extend(node.entries)
-        return tuple(
-            sorted(matches, key=lambda entry: (len(entry.reading), entry.cost, entry.surface, entry.pos))
-        )
+        for end in range(position + 1, len(reading) + 1):
+            matches.extend(self._entries_by_reading.get(reading[position:end], ()))
+        return tuple(matches)
 
     def __len__(self) -> int:
         return len(self.entries)

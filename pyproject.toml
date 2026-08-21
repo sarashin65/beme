@@ -33,5 +33,7 @@ torch = {index = "pytorch-cpu"}
 
 [dependency-groups]
 dev = [
+    "ipadic>=1.0.0",
+    "mecab-python3>=1.0.10",
     "pytest>=9.1.1",
 ]

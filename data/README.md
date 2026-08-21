@@ -1,5 +1,38 @@
 # 評価データ
 
+## BeME 既定辞書（MeCab IPADIC 取り込み）
+
+`dictionary.tsv` は MeCab IPADIC `2.7.0-20070801` の原典 CSV から生成した BeME の既定辞書です。手作りの優先語は `dictionary_manual.tsv` に分離し、生成時に上書きマージします。
+
+- 出所: [MeCab IPADIC](https://taku910.github.io/mecab/)、Debian source package `mecab-ipadic 2.7.0-20070801+main-3`
+- 固定ソース: [`mecab-ipadic_2.7.0-20070801+main.orig.tar.gz`](https://deb.debian.org/debian/pool/main/m/mecab-ipadic/mecab-ipadic_2.7.0-20070801+main.orig.tar.gz)
+- ソース SHA-256: `b62f527d881c504576baed9c6ef6561554658b175ce6ae0096a60307e49e3523`
+- 生成物: 349,043 エントリ、14,583,715 bytes
+- 生成物 SHA-256: `f0e2408dd83ab9606addaa6cb9c35798b899e1debbe9b3d96bfc5d852be9abad`
+- ライセンス: NAIST / ICOT の IPADIC ライセンス。著作権表示、再配布条件、無保証条項の全文は `licenses/IPADIC.txt`
+
+WSL2 では root 権限を必要とする apt の代わりに、開発依存 `mecab-python3>=1.0.10` と `ipadic>=1.0.0` をプロジェクトの `.venv` に導入します。実測環境では MeCab `0.996`、`mecab-python3 1.0.12`、`ipadic 1.0.0` を使用しました。`mecab-python3` / MeCab は BSD・LGPL・GPL の選択ライセンスで配布される変換ツールで、生成 TSV にそのコードは含まれません。生成スクリプトは全語彙を列挙できないコンパイル済み `sys.dic` ではなく、固定した原典 CSV を直接読みます。
+
+再生成手順:
+
+```sh
+uv sync --group dev
+curl -fLO https://deb.debian.org/debian/pool/main/m/mecab-ipadic/mecab-ipadic_2.7.0-20070801+main.orig.tar.gz
+sha256sum mecab-ipadic_2.7.0-20070801+main.orig.tar.gz
+python scripts/build_ipadic_dictionary.py \
+  mecab-ipadic_2.7.0-20070801+main.orig.tar.gz \
+  --expect-sha256 b62f527d881c504576baed9c6ef6561554658b175ce6ae0096a60307e49e3523
+```
+
+変換規則:
+
+- EUC-JP の IPADIC CSV から表記、階層 POS、読み、単語コストを取得し、カタカナ読みをひらがなへ正規化する。
+- IPADIC の階層 POS を BeME の `noun` / `proper_noun` / `verb` / `particle` 等へ集約する。
+- 記号 208 行とひらがな読みを作れない 9 行を除外し、同じ `(reading, surface, pos)` は IPADIC コストが最小の行へ集約する。頻度、固有名詞、読み長による削減は行わず、活用形と固有名詞を含む語彙を維持する。
+- IPADIC コスト $c$ は低いほど良い順序を維持したまま、$1.75 + 3.50 \times \mathrm{clamp}((c-3000)/7000, 0, 1)$ へ線形変換する。手作り辞書の最大コスト `1.65` より取り込み語の下限 `1.75` を高くし、「きしゃ」「こうしょう」等の既存優先順位を保証する。
+
+生成物 14.6 MB はリポジトリへ同梱する。固定ソースアーカイブ 12.2 MB は生成物と重複し、上記 URL と SHA-256 から再取得できるため同梱しない。Intel N100 での実測は、TSV ロード 1.851 秒、14 手作り読みのラティス構築平均 0.228 ms、クリーンな `beme convert きしゃ` プロセスの最大 RSS 159,524 KiB だった。従来の文字単位 Python trie は大辞書で不要なノードを大量生成するため、入力の終端候補を exact-reading index へ照会する方式へ変更した。
+
 ## BeME 手作りケース
 
 `evaluation_cases.jsonl` は BeME 独自の 14 件（文脈なし 12 件、文脈付き 2 件）です。既存の NDCG / MRR / Top-1 評価に使います。
