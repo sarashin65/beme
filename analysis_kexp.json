@@ -1,0 +1,167 @@
+{
+  "span_definition": "normalized input's contiguous hiragana runs; one run is single-span, otherwise multi-span",
+  "conditions": {
+    "5": {
+      "k": 5,
+      "candidate_latency_ms": 61.78592772244891,
+      "mean_cer": 0.29008046985634645,
+      "exact_match_accuracy": 0.07,
+      "mean_edit_distance": 5.53,
+      "span_aggregate": {
+        "single-span": {
+          "case_count": 95,
+          "exact_match_count": 10,
+          "exact_match_rate": 0.10526315789473684,
+          "mean_cer": 0.3407855276393473,
+          "mean_edit_distance": 3.705263157894737
+        },
+        "multi-span": {
+          "case_count": 105,
+          "exact_match_count": 4,
+          "exact_match_rate": 0.0380952380952381,
+          "mean_cer": 0.24420446519553593,
+          "mean_edit_distance": 7.180952380952381
+        }
+      },
+      "span_case_count_distribution": {
+        "1": 95,
+        "2": 48,
+        "3": 25,
+        "4": 16,
+        "5": 7,
+        "6": 5,
+        "7": 1,
+        "8": 2,
+        "10": 1
+      }
+    },
+    "10": {
+      "k": 10,
+      "candidate_latency_ms": 50.66158304186706,
+      "mean_cer": 0.29008046985634645,
+      "exact_match_accuracy": 0.07,
+      "mean_edit_distance": 5.53,
+      "span_aggregate": {
+        "single-span": {
+          "case_count": 95,
+          "exact_match_count": 10,
+          "exact_match_rate": 0.10526315789473684,
+          "mean_cer": 0.3407855276393473,
+          "mean_edit_distance": 3.705263157894737
+        },
+        "multi-span": {
+          "case_count": 105,
+          "exact_match_count": 4,
+          "exact_match_rate": 0.0380952380952381,
+          "mean_cer": 0.24420446519553593,
+          "mean_edit_distance": 7.180952380952381
+        }
+      },
+      "span_case_count_distribution": {
+        "1": 95,
+        "2": 48,
+        "3": 25,
+        "4": 16,
+        "5": 7,
+        "6": 5,
+        "7": 1,
+        "8": 2,
+        "10": 1
+      }
+    },
+    "20": {
+      "k": 20,
+      "candidate_latency_ms": 40.74597381000216,
+      "mean_cer": 0.29008046985634645,
+      "exact_match_accuracy": 0.07,
+      "mean_edit_distance": 5.53,
+      "span_aggregate": {
+        "single-span": {
+          "case_count": 95,
+          "exact_match_count": 10,
+          "exact_match_rate": 0.10526315789473684,
+          "mean_cer": 0.3407855276393473,
+          "mean_edit_distance": 3.705263157894737
+        },
+        "multi-span": {
+          "case_count": 105,
+          "exact_match_count": 4,
+          "exact_match_rate": 0.0380952380952381,
+          "mean_cer": 0.24420446519553593,
+          "mean_edit_distance": 7.180952380952381
+        }
+      },
+      "span_case_count_distribution": {
+        "1": 95,
+        "2": 48,
+        "3": 25,
+        "4": 16,
+        "5": 7,
+        "6": 5,
+        "7": 1,
+        "8": 2,
+        "10": 1
+      }
+    },
+    "64": {
+      "k": 64,
+      "candidate_latency_ms": 41.07583677114536,
+      "mean_cer": 0.29008046985634645,
+      "exact_match_accuracy": 0.07,
+      "mean_edit_distance": 5.53,
+      "span_aggregate": {
+        "single-span": {
+          "case_count": 95,
+          "exact_match_count": 10,
+          "exact_match_rate": 0.10526315789473684,
+          "mean_cer": 0.3407855276393473,
+          "mean_edit_distance": 3.705263157894737
+        },
+        "multi-span": {
+          "case_count": 105,
+          "exact_match_count": 4,
+          "exact_match_rate": 0.0380952380952381,
+          "mean_cer": 0.24420446519553593,
+          "mean_edit_distance": 7.180952380952381
+        }
+      },
+      "span_case_count_distribution": {
+        "1": 95,
+        "2": 48,
+        "3": 25,
+        "4": 16,
+        "5": 7,
+        "6": 5,
+        "7": 1,
+        "8": 2,
+        "10": 1
+      }
+    }
+  },
+  "changes_from_baseline": {
+    "10": {
+      "changed_hypothesis_count": 0,
+      "changed_hypothesis_ids": [],
+      "promoted_to_exact_count": 0,
+      "promoted_to_exact_ids": [],
+      "regressed_from_exact_count": 0,
+      "regressed_from_exact_ids": []
+    },
+    "20": {
+      "changed_hypothesis_count": 0,
+      "changed_hypothesis_ids": [],
+      "promoted_to_exact_count": 0,
+      "promoted_to_exact_ids": [],
+      "regressed_from_exact_count": 0,
+      "regressed_from_exact_ids": []
+    },
+    "64": {
+      "changed_hypothesis_count": 0,
+      "changed_hypothesis_ids": [],
+      "promoted_to_exact_count": 0,
+      "promoted_to_exact_ids": [],
+      "regressed_from_exact_count": 0,
+      "regressed_from_exact_ids": []
+    }
+  }
+}

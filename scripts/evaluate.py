@@ -82,6 +82,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ajimee-cases", type=Path, default=DEFAULT_AJIMEE_CASES)
     parser.add_argument("--mozc-cases", type=Path, default=DEFAULT_MOZC_CASES)
     parser.add_argument("--top-k", type=_positive_int, default=5)
+    parser.add_argument(
+        "--k",
+        dest="candidate_k",
+        type=_positive_int,
+        default=None,
+        help="candidate width passed to the reranker and used for evaluation",
+    )
     parser.add_argument("--beam-width", type=_positive_int, default=64)
     parser.add_argument("--cascade-threshold", type=_threshold, default=2.0)
     parser.add_argument(
@@ -239,19 +246,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        evaluation_k = args.top_k if args.candidate_k is None else args.candidate_k
         reranker, effective_reranker = _load_reranker(args)
         measured_reranker = _MeasuredReranker(reranker)
         converter = Converter.from_tsv(
             args.dictionary,
             beam_width=args.beam_width,
             reranker=measured_reranker,
+            rerank_k=args.candidate_k,
         )
         reports: dict[str, dict[str, object]] = {}
         if args.suite in {"handmade", "all"}:
             reports["handmade"] = evaluate(
                 converter,
                 load_cases(args.cases),
-                k=args.top_k,
+                k=evaluation_k,
                 cascade_threshold=args.cascade_threshold,
             )
             reports["handmade"]["suite"] = "handmade"
@@ -259,14 +268,14 @@ def main(argv: list[str] | None = None) -> int:
             reports["ajimee"] = evaluate_ajimee(
                 converter,
                 load_ajimee_cases(args.ajimee_cases),
-                k=args.top_k,
+                k=evaluation_k,
                 cascade_threshold=args.cascade_threshold,
             )
         if args.suite in {"mozc", "all"}:
             reports["mozc"] = evaluate_mozc(
                 converter,
                 load_mozc_cases(args.mozc_cases),
-                k=args.top_k,
+                k=evaluation_k,
                 cascade_threshold=args.cascade_threshold,
             )
         if args.suite == "all":

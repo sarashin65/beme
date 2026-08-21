@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from beme.converter import Candidate, Converter
+from beme.reranker import ConversionContext
 
 
 def write_dictionary(tmp_path: Path, *rows: tuple[str, str, str, float]) -> Path:
@@ -74,6 +75,37 @@ def test_homophones_are_returned_once_and_kbest_order_is_deterministic(tmp_path:
     assert len(first.candidates) == len({candidate.surface for candidate in first.candidates})
     assert list(first.candidates) == sorted(first.candidates, key=lambda candidate: (candidate.cost, candidate.surface))
     assert {candidate.surface for candidate in first.candidates} >= {"神", "紙"}
+
+
+def test_rerank_k_limits_reranker_input_without_changing_default(tmp_path: Path) -> None:
+    dictionary = write_dictionary(
+        tmp_path,
+        ("かみ", "神", "noun", 0.0),
+        ("かみ", "紙", "noun", 0.5),
+        ("か", "佳", "noun", 0.1),
+        ("み", "身", "noun", 0.1),
+    )
+
+    class RecordingReranker:
+        def __init__(self) -> None:
+            self.counts: list[int] = []
+
+        def rerank(self, candidates, context):
+            self.counts.append(len(candidates))
+            return tuple(candidates)
+
+    limited = RecordingReranker()
+    Converter.from_tsv(dictionary, reranker=limited, rerank_k=2).convert(
+        "かみ", k=4, context=ConversionContext(preceding="文脈")
+    )
+    assert limited.counts == [2]
+
+    unchanged = RecordingReranker()
+    result = Converter.from_tsv(dictionary, reranker=unchanged).convert(
+        "かみ", k=4, context=ConversionContext(preceding="文脈")
+    )
+    assert unchanged.counts == [len(result.candidates)]
+    assert unchanged.counts[0] > 2
 
 
 def test_confidence_boundary_is_strictly_below_threshold(tmp_path: Path) -> None:
