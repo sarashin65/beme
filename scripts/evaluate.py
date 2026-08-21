@@ -82,6 +82,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ajimee-cases", type=Path, default=DEFAULT_AJIMEE_CASES)
     parser.add_argument("--mozc-cases", type=Path, default=DEFAULT_MOZC_CASES)
     parser.add_argument("--top-k", type=_positive_int, default=5)
+    parser.add_argument(
+        "--rerank-k",
+        dest="rerank_k",
+        type=_positive_int,
+        default=None,
+        help="number of candidates fed to the reranker (default: every candidate)",
+    )
     parser.add_argument("--beam-width", type=_positive_int, default=64)
     parser.add_argument("--cascade-threshold", type=_threshold, default=2.0)
     parser.add_argument(
@@ -192,6 +199,10 @@ def _human_report(report: dict[str, object]) -> str:
         if report["candidate_latency_ms"] is not None
         else "Candidate latency: n/a"
     )
+    widths = (
+        f"Widths: top-k={report['top_k']}, rerank-k="
+        f"{'all' if report['rerank_k'] is None else report['rerank_k']}"
+    )
     if suite == "handmade":
         k = report["k"]
         lines = (
@@ -232,7 +243,7 @@ def _human_report(report: dict[str, object]) -> str:
             f"Mozc: {mozc['passed_count']}/{mozc['evaluated_count']} passed "
             f"({float(mozc['pass_rate']):.6f}), {mozc['skipped_count']} skipped",
         )
-    return "\n".join((reranker, *lines, latency))
+    return "\n".join((reranker, *lines, widths, latency))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -245,6 +256,7 @@ def main(argv: list[str] | None = None) -> int:
             args.dictionary,
             beam_width=args.beam_width,
             reranker=measured_reranker,
+            rerank_k=args.rerank_k,
         )
         reports: dict[str, dict[str, object]] = {}
         if args.suite in {"handmade", "all"}:
@@ -279,6 +291,8 @@ def main(argv: list[str] | None = None) -> int:
             args.cross_encoder_model if effective_reranker == "cross-encoder" else None
         )
         report["viterbi_weight"] = args.viterbi_weight
+        report["top_k"] = args.top_k
+        report["rerank_k"] = args.rerank_k
         report["candidate_latency_ms"] = measured_reranker.candidate_latency_ms
         report["scored_candidate_count"] = measured_reranker.candidate_count
     except (OSError, ValueError, TypeError) as exc:

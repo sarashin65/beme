@@ -87,14 +87,20 @@ class Converter:
         dictionary: Dictionary,
         beam_width: int = 64,
         reranker: Reranker | None = None,
+        rerank_k: int | None = None,
     ) -> None:
         if not isinstance(dictionary, Dictionary):
             raise TypeError("dictionary must be a Dictionary")
         if not isinstance(beam_width, int) or isinstance(beam_width, bool) or beam_width <= 0:
             raise ValueError("beam_width must be a positive integer")
+        if rerank_k is not None and (
+            not isinstance(rerank_k, int) or isinstance(rerank_k, bool) or rerank_k <= 0
+        ):
+            raise ValueError("rerank_k must be a positive integer or None")
         self.dictionary = dictionary
         self.beam_width = beam_width
         self.reranker = reranker
+        self.rerank_k = rerank_k
 
     @classmethod
     def from_tsv(
@@ -102,10 +108,16 @@ class Converter:
         path: str | Path,
         beam_width: int = 64,
         reranker: Reranker | None = None,
+        rerank_k: int | None = None,
     ) -> "Converter":
         """Load a strict TSV dictionary and create a converter."""
 
-        return cls(Dictionary.from_tsv(path), beam_width=beam_width, reranker=reranker)
+        return cls(
+            Dictionary.from_tsv(path),
+            beam_width=beam_width,
+            reranker=reranker,
+            rerank_k=rerank_k,
+        )
 
     def build_lattice(self, reading: str) -> Lattice:
         return build_lattice(reading, self.dictionary)
@@ -152,11 +164,18 @@ class Converter:
 
         reranked = not context.is_empty and self.reranker is not None
         if reranked:
-            ranked_candidates = tuple(self.reranker.rerank(base_candidates, context))
-            if len(ranked_candidates) != len(base_candidates) or {
+            rerank_candidates = (
+                base_candidates
+                if self.rerank_k is None
+                else base_candidates[: self.rerank_k]
+            )
+            ranked_candidates = tuple(self.reranker.rerank(rerank_candidates, context))
+            if len(ranked_candidates) != len(rerank_candidates) or {
                 candidate.surface for candidate in ranked_candidates
-            } != {candidate.surface for candidate in base_candidates}:
+            } != {candidate.surface for candidate in rerank_candidates}:
                 raise ValueError("reranker must return every input candidate exactly once")
+            if self.rerank_k is not None:
+                ranked_candidates = ranked_candidates + base_candidates[self.rerank_k :]
             candidates = ranked_candidates[:k]
         else:
             candidates = base_output
