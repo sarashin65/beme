@@ -110,3 +110,25 @@ def test_k_best_is_exactly_ordered_without_beam_pruning(tmp_path: Path) -> None:
     assert [path.cost for path in paths] == sorted(path.cost for path in paths)
     assert [path.surface for path in paths] == ["佳名", "佳菜", "蚊名", "蚊菜", "仮名"]
     assert [path.cost for path in paths] == pytest.approx([0.08, 0.35, 0.43, 0.78, 1.0])
+
+
+def test_exact_k_best_keeps_locally_expensive_global_best(tmp_path: Path) -> None:
+    """A narrow local beam must not discard a path that wins later."""
+
+    dictionary = Dictionary.from_tsv(
+        write_dictionary(
+            tmp_path,
+            "か\t低\tnoun\t0.0\n"
+            "か\t高\tparticle\t0.05\n"
+            "き\tく\tverb\t0.0\n",
+        )
+    )
+    lattice = build_lattice("かき", dictionary)
+
+    exact = k_best_viterbi(lattice, beam_width=1)
+    locally_pruned = lattice.paths_at(2, beam_width=1)
+
+    assert exact[0].surface == "高く"
+    assert exact[0].cost == pytest.approx(0.09)
+    assert locally_pruned[0].surface == "低く"
+    assert all(path.surface != "高く" for path in locally_pruned)

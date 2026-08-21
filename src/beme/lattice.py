@@ -387,9 +387,16 @@ def k_best_viterbi(lattice: Lattice, beam_width: int = 64) -> tuple[LatticePath,
     heapq.heappush(queue, (remaining[0][None], 0.0, next(sequence), 0, root))
     results: list[LatticePath] = []
     terminal = len(lattice.nodes) - 1
+    max_pops = 200 * beam_width * len(lattice.nodes)
+    pops = 0
 
     while queue and len(results) < beam_width:
         _, _, _, position, path = heapq.heappop(queue)
+        pops += 1
+        # This heuristic is strict, so the guard should not normally be reached;
+        # it is a fail-safe for regressions that accidentally make search unbounded.
+        if pops > max_pops:
+            break
         if position == terminal:
             results.append(path)
             continue
