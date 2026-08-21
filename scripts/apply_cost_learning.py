@@ -215,8 +215,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: --input dictionary not found: {args.input}", file=sys.stderr)
         return 1
 
-    # Create the output directory up front too, so a missing directory is
-    # reported immediately rather than after corpus parsing completes.
+    # Create the output directory up front too, so a bad --output path raises
+    # here rather than after corpus parsing has already completed.
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     frequencies = collect_frequencies(args.corpus, workers=args.workers, chunk_lines=args.chunk_lines)
