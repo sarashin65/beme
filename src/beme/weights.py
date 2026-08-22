@@ -90,7 +90,12 @@ class Weights(Mapping[str, float]):
             raise ValueError("weights must be a JSON object")
         from .features import FeatureSpec
 
-        spec = FeatureSpec.legacy_v1() if feature_spec == "legacy_v1" else FeatureSpec(feature_spec)
+        if feature_spec == "legacy_v1":
+            spec = FeatureSpec.legacy_v1()
+        elif feature_spec == "decomposed_v1":
+            spec = FeatureSpec.decomposed_v1()
+        else:
+            spec = FeatureSpec(feature_spec)
         known = set(spec.lexical_features) | set(spec.transition_features)
         unknown = sorted(set(values) - known)
         if unknown and strict:

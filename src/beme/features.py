@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Hashable
+import unicodedata
 
 from .lattice import LatticeEdge
 
@@ -45,6 +46,18 @@ class FeatureSpec:
             ),
         )
 
+    @classmethod
+    def decomposed_v1(cls) -> "FeatureSpec":
+        return cls(
+            "decomposed_v1",
+            (
+                "lex.ipadic_cost_mapped", "lex.katakana_surface", "lex.source.overlay",
+                "lex.unknown", "lex.literal", "lex.base_cost", "lex.overlay_cost",
+                "lex.reading_len", "lex.surface_len", "lex.script.*", "lex.proper_noun",
+            ),
+            LEGACY_V1_SPEC.transition_features if "LEGACY_V1_SPEC" in globals() else FeatureSpec.legacy_v1().transition_features,
+        )
+
 
 LEGACY_V1_SPEC = FeatureSpec.legacy_v1()
 
@@ -58,6 +71,22 @@ class FeatureExtractor:
         self.spec = spec
 
     def lexical_features(self, edge: LatticeEdge) -> dict[str, float]:
+        if self.spec.id == "decomposed_v1":
+            token = edge.token
+            if token.pos == "unknown":
+                return {"lex.unknown": 1.0}
+            if token.pos == "literal":
+                return {"lex.literal": 1.0}
+            if token.raw_cost is not None:
+                from .ipadic import map_ipadic_cost
+                features = {"lex.ipadic_cost_mapped": map_ipadic_cost(token.raw_cost)}
+                if any("ァ" <= char <= "ヺ" for char in unicodedata.normalize("NFKC", token.surface)):
+                    features["lex.katakana_surface"] = 1.0
+                return features
+            # v1 dictionaries and hand-written overlays have no raw IPADIC cost.
+            if token.source == "overlay":
+                return {"lex.base_cost": token.cost}
+            return {"lex.base_cost": token.cost}
         if self.spec.id != "legacy_v1":
             raise ValueError(f"unsupported feature specification: {self.spec.id!r}")
         return {"lex.base_cost": edge.token.cost}
@@ -65,7 +94,7 @@ class FeatureExtractor:
     def transition_features(
         self, previous: Hashable | None, edge: LatticeEdge
     ) -> dict[str, float]:
-        if self.spec.id != "legacy_v1":
+        if self.spec.id not in {"legacy_v1", "decomposed_v1"}:
             raise ValueError(f"unsupported feature specification: {self.spec.id!r}")
         current = edge.token.pos
         if previous is None:
@@ -89,6 +118,13 @@ class FeatureExtractor:
 
 def legacy_v1_extractor() -> FeatureExtractor:
     return FeatureExtractor(LEGACY_V1_SPEC)
+
+
+DECOMPOSED_V1_SPEC = FeatureSpec.decomposed_v1()
+
+
+def decomposed_v1_extractor() -> FeatureExtractor:
+    return FeatureExtractor(DECOMPOSED_V1_SPEC)
 
 
 def path_features(path: LatticePath, extractor: FeatureExtractor) -> dict[str, float]:
@@ -135,7 +171,7 @@ def extractor_state_key(extractor: FeatureExtractor, edge: LatticeEdge) -> Hasha
     # FeatureExtractor currently has the same state definition as LinearScorer.
     # Keeping this small adapter here avoids making path serialization depend on
     # a scorer instance.
-    if extractor.spec.id == "legacy_v1":
+    if extractor.spec.id in {"legacy_v1", "decomposed_v1"}:
         return edge.token.pos
     raise ValueError(f"unsupported feature specification: {extractor.spec.id!r}")
 
@@ -156,6 +192,8 @@ __all__ = [
     "FeatureExtractor",
     "FeatureSpec",
     "LEGACY_V1_SPEC",
+    "DECOMPOSED_V1_SPEC",
+    "decomposed_v1_extractor",
     "feature_delta",
     "legacy_v1_extractor",
     "path_features",

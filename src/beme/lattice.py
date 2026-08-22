@@ -35,10 +35,20 @@ class Token:
     surface: str
     pos: str
     cost: float
+    pos_detail: str = ""
+    conjugation: str = ""
+    left_id: int = -1
+    right_id: int = -1
+    source: str = ""
+    raw_cost: int | None = None
 
     @classmethod
     def from_entry(cls, entry: DictionaryEntry) -> "Token":
-        return cls(entry.reading, entry.surface, entry.pos, float(entry.cost))
+        return cls(
+            entry.reading, entry.surface, entry.pos, float(entry.cost),
+            entry.pos_detail, entry.conjugation, entry.left_id, entry.right_id,
+            entry.source, entry.raw_cost,
+        )
 
 
 @dataclass(frozen=True, slots=True)
