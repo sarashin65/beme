@@ -1,0 +1,10 @@
+{
+  "corpus": "/home/sarashin/work/beme/data/corpus.txt",
+  "corpus_sha256": "ffd11238de39225c52a5e81da85cf4d6722fd251ad5881d1c98c02af0d238b60",
+  "native_tokens": 29704060,
+  "nonempty_lines": 806262,
+  "requested_revision": "060db6499f32faf8b98477b0a26969ef7d8b9987",
+  "resolved_revision": "060db6499f32faf8b98477b0a26969ef7d8b9987",
+  "tokenizer": "Qwen/Qwen2.5-0.5B",
+  "utf8_bytes": 104857600
+}

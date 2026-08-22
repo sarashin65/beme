@@ -1,0 +1,57 @@
+{
+  "article_overlaps": {
+    "dev_test": [],
+    "train_dev": [],
+    "train_test": []
+  },
+  "audit": {
+    "audited": 200,
+    "completed": true,
+    "correct": 199,
+    "data_gate_pass": true,
+    "incorrect": 1,
+    "label_accuracy": 0.995,
+    "sample_size": 200,
+    "seed": 20260822
+  },
+  "contrast_pairs": {
+    "dev": 22,
+    "test": 64,
+    "train": 436
+  },
+  "counts": {
+    "dev": 1000,
+    "test": 2000,
+    "train": 10000
+  },
+  "data_go": true,
+  "gates": {
+    "all_groups_valid": true,
+    "article_disjoint": true,
+    "audit_accuracy_at_least_98pct": true,
+    "audit_complete": true,
+    "context_contrast_present": true,
+    "counts_exact": true,
+    "evaluation_overlap_exclusion_recorded": true,
+    "normalized_group_disjoint": true,
+    "source_manifest_complete": true,
+    "train_gold_in_candidate_at_least_10k": true
+  },
+  "invalid_group_count": 0,
+  "invalid_group_ids": [],
+  "normalized_group_fingerprint_overlaps": {
+    "dev_test": 0,
+    "train_dev": 0,
+    "train_test": 0
+  },
+  "unique_articles": {
+    "dev": 65,
+    "test": 129,
+    "train": 696
+  },
+  "unique_readings": {
+    "dev": 976,
+    "test": 1925,
+    "train": 8964
+  }
+}
