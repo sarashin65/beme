@@ -23,7 +23,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from beme import __version__  # noqa: E402
 from beme.dictionary import Dictionary  # noqa: E402
-from beme.features import decomposed_v1_extractor, legacy_v1_extractor  # noqa: E402
+from beme.features import extractor_for  # noqa: E402
 from beme.lattice import build_lattice  # noqa: E402
 from beme.training import evaluate_split, evaluate_test, train_scorer  # noqa: E402
 from beme.training_data import build_manifest, load_splits  # noqa: E402
@@ -132,11 +132,7 @@ def _atomic_weights(path: Path, weights: Weights) -> None:
 
 
 def _extractor(feature_spec: str):
-    if feature_spec == "legacy_v1":
-        return legacy_v1_extractor()
-    if feature_spec == "decomposed_v1":
-        return decomposed_v1_extractor()
-    raise ValueError(f"unsupported feature specification: {feature_spec!r}")
+    return extractor_for(feature_spec)
 
 
 def run(args: argparse.Namespace) -> dict[str, object]:

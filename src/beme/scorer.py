@@ -52,7 +52,9 @@ class LinearScorer:
         self._transition_cache: dict[tuple[Hashable | None, Token], float] = {}
 
     def state_key(self, edge: LatticeEdge) -> Hashable:
-        return edge.token.pos
+        from .features import extractor_state_key
+
+        return extractor_state_key(self.extractor, edge)
 
     def _dot(self, features: dict[str, float]) -> float:
         total = 0.0

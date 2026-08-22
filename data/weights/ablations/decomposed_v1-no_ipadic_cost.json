@@ -1,0 +1,33 @@
+{
+  "averaged": false,
+  "created": "2026-08-22",
+  "default_weight": 0.0,
+  "feature_spec": "decomposed_v1-no_ipadic_cost",
+  "format": "beme.weights/1",
+  "name": "decomposed_v1",
+  "updates": 0,
+  "weights": {
+    "lex.base_cost": 1.0,
+    "lex.katakana_surface": 1.0,
+    "lex.literal": 0.0,
+    "lex.overlay_cost": 0.0,
+    "lex.source.overlay": 0.0,
+    "lex.unknown": 8.0,
+    "trans.bos": 0.0,
+    "trans.default": 0.12,
+    "trans.pair.adjective>auxiliary": 0.03,
+    "trans.pair.noun>particle": 0.05,
+    "trans.pair.particle>adjective": 0.04,
+    "trans.pair.particle>noun": 0.03,
+    "trans.pair.particle>proper_noun": 0.03,
+    "trans.pair.particle>unknown": 0.1,
+    "trans.pair.particle>verb": 0.04,
+    "trans.pair.pronoun>particle": 0.05,
+    "trans.pair.proper_noun>particle": 0.05,
+    "trans.pair.unknown>particle": 0.1,
+    "trans.pair.unknown>unknown": 0.2,
+    "trans.pair.verb>auxiliary": 0.03,
+    "trans.pair.verb>particle": 0.05,
+    "trans.same_pos": 0.08
+  }
+}

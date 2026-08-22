@@ -34,6 +34,7 @@ class FeatureSpec:
     id: str
     lexical_features: tuple[str, ...] = ("lex.base_cost",)
     transition_features: tuple[str, ...] = ()
+    family: str = "legacy_v1"
 
     @classmethod
     def legacy_v1(cls) -> "FeatureSpec":
@@ -58,6 +59,7 @@ class FeatureSpec:
                 "trans.same_pos",
                 "trans.default",
             ),
+            "legacy_v1",
         )
 
     @classmethod
@@ -72,6 +74,7 @@ class FeatureSpec:
                 "lex.proper_noun",
             ),
             LEGACY_V1_SPEC.transition_features if "LEGACY_V1_SPEC" in globals() else FeatureSpec.legacy_v1().transition_features,
+            "decomposed_v1",
         )
 
 
@@ -87,7 +90,7 @@ class FeatureExtractor:
         self.spec = spec
 
     def lexical_features(self, edge: LatticeEdge) -> dict[str, float]:
-        if self.spec.id == "decomposed_v1":
+        if self.spec.family == "decomposed_v1":
             token = edge.token
             features: dict[str, float] = {
                 "lex.source.overlay": float(token.source == "overlay"),
@@ -136,15 +139,18 @@ class FeatureExtractor:
             else:
                 # v1 dictionaries and hand-written overlays have no raw IPADIC cost.
                 features["lex.base_cost"] = token.cost
-            return features
-        if self.spec.id != "legacy_v1":
+            return {name: value for name, value in features.items()
+                    if name in self.spec.lexical_features}
+        if self.spec.family != "legacy_v1":
             raise ValueError(f"unsupported feature specification: {self.spec.id!r}")
-        return {"lex.base_cost": edge.token.cost}
+        features = {"lex.base_cost": edge.token.cost}
+        return {name: value for name, value in features.items()
+                if name in self.spec.lexical_features}
 
     def transition_features(
         self, previous: Hashable | None, edge: LatticeEdge
     ) -> dict[str, float]:
-        if self.spec.id not in {"legacy_v1", "decomposed_v1"}:
+        if self.spec.family not in {"legacy_v1", "decomposed_v1"}:
             raise ValueError(f"unsupported feature specification: {self.spec.id!r}")
         current = edge.token.pos
         if previous is None:
@@ -158,7 +164,7 @@ class FeatureExtractor:
                 name = "trans.same_pos"
             else:
                 name = "trans.default"
-        return {name: 1.0}
+        return {name: 1.0} if name in self.spec.transition_features else {}
 
     def edge_features(self, edge: LatticeEdge) -> dict[str, float]:
         """Return the lexical features active on one edge."""
@@ -167,14 +173,59 @@ class FeatureExtractor:
 
 
 def legacy_v1_extractor() -> FeatureExtractor:
-    return FeatureExtractor(LEGACY_V1_SPEC)
+    return extractor_for("legacy_v1")
 
 
 DECOMPOSED_V1_SPEC = FeatureSpec.decomposed_v1()
 
 
+def _spec_without(base: FeatureSpec, spec_id: str, removed: set[str]) -> FeatureSpec:
+    return FeatureSpec(
+        spec_id,
+        tuple(name for name in base.lexical_features if name not in removed),
+        tuple(name for name in base.transition_features if name not in removed),
+        base.family,
+    )
+
+
+_ABLATION_REMOVALS = {
+    "decomposed_v1-lex_only": set(DECOMPOSED_V1_SPEC.transition_features),
+    "decomposed_v1-trans_only": set(DECOMPOSED_V1_SPEC.lexical_features),
+    "decomposed_v1-no_ipadic_cost": {"lex.ipadic_cost_mapped"},
+    "decomposed_v1-no_source": {"lex.source.overlay", "lex.overlay_cost"},
+    "decomposed_v1-no_katakana": {"lex.katakana_surface"},
+    "decomposed_v1-no_shape": {
+        *(f"lex.script.{category}" for category in _SCRIPT_CATEGORIES),
+        "lex.surface_len", "lex.proper_noun",
+    },
+}
+_SPEC_REGISTRY = {
+    "legacy_v1": LEGACY_V1_SPEC,
+    "decomposed_v1": DECOMPOSED_V1_SPEC,
+    **{
+        spec_id: _spec_without(DECOMPOSED_V1_SPEC, spec_id, removed)
+        for spec_id, removed in _ABLATION_REMOVALS.items()
+    },
+}
+
+
+def resolve_spec(spec_id: str) -> FeatureSpec:
+    try:
+        return _SPEC_REGISTRY[spec_id]
+    except KeyError as exc:
+        raise ValueError(f"unsupported feature specification: {spec_id!r}") from exc
+
+
+def extractor_for(spec_id: str) -> FeatureExtractor:
+    return FeatureExtractor(resolve_spec(spec_id))
+
+
+def registered_spec_ids() -> tuple[str, ...]:
+    return tuple(_SPEC_REGISTRY)
+
+
 def decomposed_v1_extractor() -> FeatureExtractor:
-    return FeatureExtractor(DECOMPOSED_V1_SPEC)
+    return extractor_for("decomposed_v1")
 
 
 def path_features(
@@ -212,7 +263,7 @@ def path_features(
     # legacy scorer's bit-exact total by carrying the rounding residual in its
     # unit-weight lexical feature.  This is only a representation correction:
     # the residual is a reassociation artefact and must stay near one ULP.
-    if extractor.spec.id == "legacy_v1" and features:
+    if extractor.spec.family == "legacy_v1" and features:
         if weights is None:
             from .scorer import legacy_v1_weights
 
@@ -244,7 +295,7 @@ def extractor_state_key(extractor: FeatureExtractor, edge: LatticeEdge) -> Hasha
     # FeatureExtractor currently has the same state definition as LinearScorer.
     # Keeping this small adapter here avoids making path serialization depend on
     # a scorer instance.
-    if extractor.spec.id in {"legacy_v1", "decomposed_v1"}:
+    if extractor.spec.family in {"legacy_v1", "decomposed_v1"}:
         return edge.token.pos
     raise ValueError(f"unsupported feature specification: {extractor.spec.id!r}")
 
@@ -267,7 +318,10 @@ __all__ = [
     "LEGACY_V1_SPEC",
     "DECOMPOSED_V1_SPEC",
     "decomposed_v1_extractor",
+    "extractor_for",
     "feature_delta",
     "legacy_v1_extractor",
     "path_features",
+    "registered_spec_ids",
+    "resolve_spec",
 ]
