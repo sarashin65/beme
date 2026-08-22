@@ -13,6 +13,14 @@ from .lattice import (
 )
 from .oracle import constrained_best_path
 from .training_data import TrainingExample, build_manifest, load_jsonl, load_splits
+from .training import (
+    EpochResult,
+    SplitEvaluation,
+    TrainingResult,
+    evaluate_split,
+    evaluate_test,
+    train_scorer,
+)
 from .reranker import (
     ConversionContext,
     CrossEncoderReranker,
@@ -48,9 +56,15 @@ __all__ = [
     "build_lattice",
     "constrained_best_path",
     "TrainingExample",
+    "EpochResult",
+    "SplitEvaluation",
+    "TrainingResult",
     "build_manifest",
+    "evaluate_split",
+    "evaluate_test",
     "load_jsonl",
     "load_splits",
+    "train_scorer",
     "k_best_viterbi",
     "load_tsv",
     "pos_transition_cost",
