@@ -12,6 +12,7 @@ from .lattice import (
     pos_transition_cost,
 )
 from .oracle import constrained_best_path
+from .training_data import TrainingExample, build_manifest, load_jsonl, load_splits
 from .reranker import (
     ConversionContext,
     CrossEncoderReranker,
@@ -46,6 +47,10 @@ __all__ = [
     "__version__",
     "build_lattice",
     "constrained_best_path",
+    "TrainingExample",
+    "build_manifest",
+    "load_jsonl",
+    "load_splits",
     "k_best_viterbi",
     "load_tsv",
     "pos_transition_cost",
