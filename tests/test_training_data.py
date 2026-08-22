@@ -83,3 +83,103 @@ def test_missing_split_path_fails_instead_of_using_synthetic_data(tmp_path: Path
     paths["train"].write_text('{"reading":"か","target_surface":"可"}\n', encoding="utf-8")
     with pytest.raises(OSError):
         load_splits(paths)
+
+
+def test_all_d1_fields_load_and_positive_is_canonical(tmp_path: Path) -> None:
+    path = write_jsonl(
+        tmp_path,
+        '{"id":"full-1","source":"synthetic","article_id":"article-full",'
+        '"article_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+        '"left_context":"前","reading":"かな","right_context":"後",'
+        '"positive":"仮名","candidates":["仮名","佳名"],"viterbi_costs":[1.0,2.0],'
+        '"frequency_bucket":{"positive":"mid"},"context_truncated":false,'
+        '"contrast_pair_id":"pair-1","gold_index":0,"span_tokens":["名詞"],"split":"train"}\n',
+    )
+    example = load_jsonl(path)[0]
+    assert example.target_surface == "仮名"
+    assert example.article_sha256 == "a" * 64
+    assert example.context_truncated is False
+    assert example.contrast_pair_id == "pair-1"
+    assert example.gold_index == 0
+    assert example.span_tokens == ("名詞",)
+    assert example.split == "train"
+
+
+def test_unknown_field_is_still_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"line 1.*unknown field"):
+        load_jsonl(write_jsonl(tmp_path, '{"reading":"か","positive":"可","new_field":1}\n'))
+
+
+@pytest.mark.parametrize("value", ["a", "g" * 64, "1" * 63])
+def test_article_sha256_format_is_strict(tmp_path: Path, value: str) -> None:
+    text = json.dumps({"reading": "か", "positive": "可", "article_sha256": value}) + "\n"
+    with pytest.raises(ValueError, match=r"line 1.*article_sha256"):
+        load_jsonl(write_jsonl(tmp_path, text))
+
+
+@pytest.mark.parametrize("value", [0, 1, "false", None])
+def test_context_truncated_requires_a_real_bool(tmp_path: Path, value: object) -> None:
+    text = json.dumps({"reading": "か", "positive": "可", "context_truncated": value}) + "\n"
+    if isinstance(value, bool):
+        assert load_jsonl(write_jsonl(tmp_path, text))[0].context_truncated is value
+    else:
+        with pytest.raises(ValueError, match=r"line 1.*context_truncated"):
+            load_jsonl(write_jsonl(tmp_path, text))
+
+
+def test_contrast_pair_cannot_cross_splits(tmp_path: Path) -> None:
+    def make(name: str, split: str) -> Path:
+        return write_jsonl(tmp_path, json.dumps({"reading": "か", "positive": "可", "contrast_pair_id": "p", "split": split}) + "\n", name)
+
+    with pytest.raises(ValueError, match="contrast_pair_id.*crosses"):
+        load_splits({"train": make("train", "train"), "dev": make("dev", "dev"), "test": make("test", "test")})
+
+
+def test_same_article_cannot_have_different_hashes(tmp_path: Path) -> None:
+    def make(name: str, digest: str) -> Path:
+        text = json.dumps({"reading": "か", "positive": "可", "article_id": "article", "article_sha256": digest}) + "\n"
+        return write_jsonl(tmp_path, text, name)
+
+    paths = {"train": make("train", "a" * 64), "dev": make("dev", "b" * 64), "test": make("test", "a" * 64)}
+    with pytest.raises(ValueError, match="inconsistent article_sha256"):
+        load_splits(paths)
+
+
+@pytest.mark.parametrize("gold_index", [-1, 2])
+def test_gold_index_range_is_checked(tmp_path: Path, gold_index: int) -> None:
+    text = json.dumps({"reading": "か", "positive": "可", "candidates": ["可", "課"], "viterbi_costs": [1, 2], "gold_index": gold_index}) + "\n"
+    with pytest.raises(ValueError, match=r"line 1.*gold_index"):
+        load_jsonl(write_jsonl(tmp_path, text))
+
+
+def test_gold_index_must_point_at_positive(tmp_path: Path) -> None:
+    text = '{"reading":"か","positive":"可","candidates":["課","可"],"viterbi_costs":[1,2],"gold_index":0}\n'
+    with pytest.raises(ValueError, match=r"line 1.*gold_index"):
+        load_jsonl(write_jsonl(tmp_path, text))
+
+
+def test_span_tokens_must_be_an_array(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"line 1.*span_tokens"):
+        load_jsonl(write_jsonl(tmp_path, '{"reading":"か","positive":"可","span_tokens":"名詞"}\n'))
+
+
+def test_split_value_and_destination_must_match(tmp_path: Path) -> None:
+    path = write_jsonl(tmp_path, '{"reading":"か","positive":"可","split":"dev"}\n')
+    valid = write_jsonl(tmp_path, '{"reading":"き","positive":"気"}\n', "valid.jsonl")
+    paths = {"train": path, "dev": valid, "test": valid}
+    with pytest.raises(ValueError, match="does not match"):
+        load_splits(paths)
+
+
+def test_split_value_must_be_one_of_the_three_splits(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"line 1.*split"):
+        load_jsonl(write_jsonl(tmp_path, '{"reading":"か","positive":"可","split":"holdout"}\n'))
+
+
+def test_manifest_new_fields_are_deterministic(tmp_path: Path) -> None:
+    paths = {name: FIXTURE / f"{name}.jsonl" for name in ("train", "dev", "test")}
+    first = load_splits(paths)[1]
+    second = load_splits(paths)[1]
+    assert first == second
+    assert first["split_field_verified"] is False
+    assert first["splits"]["train"]["article_sha256_present_count"] == 0
