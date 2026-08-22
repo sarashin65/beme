@@ -38,7 +38,7 @@ def _parse_non_negative_int(
     *,
     default: int,
 ) -> int:
-    if value is None:
+    if value is None or value == "":
         return default
     try:
         parsed = int(value)

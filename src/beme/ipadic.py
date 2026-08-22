@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Iterable, Iterator, TextIO
 
-from .dictionary import Dictionary, is_hiragana
+from .dictionary import Dictionary, DictionaryEntry, is_hiragana
 
 DEFAULT_RAW_COST_FLOOR = 3_000
 DEFAULT_RAW_COST_CEILING = 10_000
@@ -170,8 +170,8 @@ def _load_imported_entries(
     raw_ceiling: int,
     beme_floor: float,
     beme_ceiling: float,
-) -> tuple[dict[tuple[str, str, str], float], tuple[int, int, int, int]]:
-    entries: dict[tuple[str, str, str], float] = {}
+) -> tuple[dict[tuple[str, str, str], DictionaryEntry], tuple[int, int, int, int]]:
+    entries: dict[tuple[str, str, str], DictionaryEntry] = {}
     source_rows = duplicate_rows = skipped_symbols = skipped_readings = 0
     for row, label, line_number in _source_rows(source, encoding):
         source_rows += 1
@@ -206,9 +206,15 @@ def _load_imported_entries(
         previous = entries.get(key)
         if previous is not None:
             duplicate_rows += 1
-            if cost >= previous:
+            if cost >= previous.cost:
                 continue
-        entries[key] = cost
+        pos_detail = "/".join(value for value in (primary, secondary, tertiary) if value != "*")
+        conjugation = "/".join(value for value in (row[7], row[8]) if value != "*")
+        entries[key] = DictionaryEntry(
+            reading=reading, surface=surface, pos=pos, cost=cost,
+            pos_detail=pos_detail, conjugation=conjugation,
+            left_id=int(row[1]), right_id=int(row[2]), source="ipadic", raw_cost=raw_cost,
+        )
     return entries, (source_rows, duplicate_rows, skipped_symbols, skipped_readings)
 
 
@@ -222,8 +228,17 @@ def build_dictionary(
     raw_ceiling: int = DEFAULT_RAW_COST_CEILING,
     beme_floor: float = DEFAULT_BEME_COST_FLOOR,
     beme_ceiling: float = DEFAULT_BEME_COST_CEILING,
+    schema: str = "v1",
 ) -> DictionaryBuildStats:
-    """Build a deterministic BeME TSV from IPADIC CSV files and overlays."""
+    """Build a deterministic BeME TSV from IPADIC CSV files and overlays.
+
+    Duplicate keys retain all attributes from the row with the lowest mapped
+    cost. Overlay entries replace imported rows and are marked ``overlay`` in
+    schema v2 output.
+    """
+
+    if schema not in {"v1", "v2"}:
+        raise ValueError(f"unsupported dictionary schema: {schema!r}")
 
     source_path = Path(source)
     output_path = Path(output)
@@ -241,11 +256,16 @@ def build_dictionary(
         overlay = Dictionary.from_tsv(overlay_path)
         overlay_entries += len(overlay)
         for entry in overlay.entries:
-            entries[(entry.reading, entry.surface, entry.pos)] = entry.cost
+            entries[(entry.reading, entry.surface, entry.pos)] = DictionaryEntry(
+                reading=entry.reading, surface=entry.surface, pos=entry.pos, cost=entry.cost,
+                pos_detail=entry.pos_detail, conjugation=entry.conjugation,
+                left_id=entry.left_id, right_id=entry.right_id,
+                source="overlay", raw_cost=entry.raw_cost,
+            )
 
     ordered = sorted(
         entries.items(),
-        key=lambda item: (item[0][0], item[1], item[0][1], item[0][2]),
+        key=lambda item: (item[0][0], item[1].cost, item[0][1], item[0][2]),
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_name: str | None = None
@@ -260,9 +280,21 @@ def build_dictionary(
         ) as handle:
             temporary_name = handle.name
             writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
-            writer.writerow(("reading", "surface", "pos", "cost"))
-            for (reading, surface, pos), cost in ordered:
-                writer.writerow((reading, surface, pos, f"{cost:.3f}"))
+            if schema == "v2":
+                writer.writerow(("reading", "surface", "pos", "cost", "pos_detail", "conjugation", "left_id", "right_id", "source", "raw_cost"))
+            else:
+                writer.writerow(("reading", "surface", "pos", "cost"))
+            for (reading, surface, pos), entry in ordered:
+                if schema == "v2":
+                    writer.writerow((
+                        reading, surface, pos, f"{entry.cost:.3f}", entry.pos_detail,
+                        entry.conjugation,
+                        "" if entry.left_id < 0 else entry.left_id,
+                        "" if entry.right_id < 0 else entry.right_id,
+                        entry.source, "" if entry.raw_cost is None else entry.raw_cost,
+                    ))
+                else:
+                    writer.writerow((reading, surface, pos, f"{entry.cost:.3f}"))
         os.replace(temporary_name, output_path)
         temporary_name = None
     finally:

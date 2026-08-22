@@ -141,6 +141,33 @@ def test_build_dictionary_penalizes_surfaces_containing_katakana_letters(
     }
 
 
+def test_build_dictionary_v2_preserves_selected_attributes(tmp_path: Path) -> None:
+    source = tmp_path / "ipadic.tar.gz"
+    selected = _ipadic_row("記者", 4_000, "名詞", "キシャ", "固有名詞", "人名")
+    selected[1:4] = ["12", "34", "4000"]
+    duplicate = _ipadic_row("記者", 5_000, "名詞", "キシャ", "一般", "*")
+    _write_source_archive(source, [duplicate, selected])
+    overlay = tmp_path / "overlay.tsv"
+    overlay.write_text(
+        "reading\tsurface\tpos\tcost\nきしゃ\t記者\tproper_noun\t0.800\n",
+        encoding="utf-8",
+    )
+
+    output = tmp_path / "dictionary_v2.tsv"
+    build_dictionary(source, output, overlays=[overlay], encoding="utf-8", schema="v2")
+    entry = Dictionary.from_tsv(output).lookup("きしゃ")[0]
+    assert entry.source == "overlay"
+    assert entry.left_id == -1
+    assert entry.raw_cost is None
+
+    output_no_overlay = tmp_path / "dictionary_v2_no_overlay.tsv"
+    build_dictionary(source, output_no_overlay, overlays=[], encoding="utf-8", schema="v2")
+    entry = Dictionary.from_tsv(output_no_overlay).lookup("きしゃ")[0]
+    assert (entry.pos_detail, entry.conjugation, entry.left_id, entry.right_id, entry.raw_cost) == (
+        "名詞/固有名詞/人名", "", 12, 34, 4000
+    )
+
+
 def test_build_dictionary_rejects_malformed_source_row(tmp_path: Path) -> None:
     source = tmp_path / "ipadic.tar.gz"
     _write_source_archive(source, [["too", "short"]])
