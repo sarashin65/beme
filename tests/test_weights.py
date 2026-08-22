@@ -10,9 +10,11 @@ import sys
 
 import pytest
 
-from beme.features import legacy_v1_extractor
+from beme.features import DECOMPOSED_V1_SPEC, legacy_v1_extractor
 from beme.scorer import LinearScorer
 from beme.weights import DEFAULT_WEIGHTS_PATH, Weights
+
+DECOMPOSED_WEIGHTS_PATH = Path(__file__).resolve().parents[1] / "data" / "weights" / "decomposed_v1.json"
 
 
 def test_weights_round_trip_is_deterministic(tmp_path: Path) -> None:
@@ -48,6 +50,34 @@ def test_weights_unknown_feature_strict_flag(tmp_path: Path) -> None:
     with pytest.warns(UserWarning, match="unknown feature"):
         loaded = Weights.load(path, strict=False)
     assert loaded["future.feature"] == 2.0
+
+
+def test_decomposed_script_features_round_trip(tmp_path: Path) -> None:
+    """Regression for issue #9 Phase 1 review M1.
+
+    FeatureSpec.decomposed_v1() used to declare the glob string
+    "lex.script.*" while FeatureExtractor actually emits
+    "lex.script.kanji"/"lex.script.hiragana"/"lex.script.katakana"/
+    "lex.script.other". Weights.load() only recognizes literal names, so a
+    weights file that a Phase 2 learner wrote after putting weight on any
+    script feature could never be loaded back, strict or not. Before the fix
+    this raised "unknown feature name(s): lex.script.kanji" for every one of
+    them.
+    """
+    document = json.loads(DECOMPOSED_WEIGHTS_PATH.read_text())
+    script_names = [name for name in DECOMPOSED_V1_SPEC.lexical_features if name.startswith("lex.script.")]
+    assert script_names == [
+        "lex.script.kanji", "lex.script.hiragana", "lex.script.katakana", "lex.script.other",
+    ]
+    for name in script_names:
+        document["weights"][name] = 0.5
+    path = tmp_path / "decomposed_with_scripts.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+    loaded = Weights.load(path, feature_spec="decomposed_v1")
+
+    for name in script_names:
+        assert loaded[name] == 0.5
 
 
 def _run_convert(weight_path: Path, dictionary: Path) -> str:

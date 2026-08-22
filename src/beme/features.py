@@ -18,6 +18,14 @@ if TYPE_CHECKING:
 # over that while staying far below any real weight mismatch.
 _RESIDUAL_TOLERANCE = 1e-9
 
+# The surface-script family of features. Kept as one tuple so the feature
+# names declared by FeatureSpec.decomposed_v1() and the names emitted by
+# FeatureExtractor.lexical_features() cannot drift apart the way the single
+# glob string "lex.script.*" once did (see issue #9 Phase 1 review, M1):
+# Weights.load() only recognizes literal feature names, so any name it does
+# not see here it rejects outright.
+_SCRIPT_CATEGORIES = ("kanji", "hiragana", "katakana", "other")
+
 
 @dataclass(frozen=True, slots=True)
 class FeatureSpec:
@@ -59,7 +67,9 @@ class FeatureSpec:
             (
                 "lex.ipadic_cost_mapped", "lex.katakana_surface", "lex.source.overlay",
                 "lex.unknown", "lex.literal", "lex.base_cost", "lex.overlay_cost",
-                "lex.reading_len", "lex.surface_len", "lex.script.*", "lex.proper_noun",
+                "lex.reading_len", "lex.surface_len",
+                *(f"lex.script.{category}" for category in _SCRIPT_CATEGORIES),
+                "lex.proper_noun",
             ),
             LEGACY_V1_SPEC.transition_features if "LEGACY_V1_SPEC" in globals() else FeatureSpec.legacy_v1().transition_features,
         )
@@ -95,6 +105,7 @@ class FeatureExtractor:
                 script = "katakana"
             else:
                 script = "other"
+            assert script in _SCRIPT_CATEGORIES
             features[f"lex.script.{script}"] = 1.0
             if token.pos == "unknown":
                 features["lex.unknown"] = 1.0
