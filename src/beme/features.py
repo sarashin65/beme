@@ -73,20 +73,36 @@ class FeatureExtractor:
     def lexical_features(self, edge: LatticeEdge) -> dict[str, float]:
         if self.spec.id == "decomposed_v1":
             token = edge.token
+            features: dict[str, float] = {
+                "lex.source.overlay": float(token.source == "overlay"),
+                "lex.overlay_cost": token.cost if token.source == "overlay" else 0.0,
+                "lex.reading_len": float(len(token.reading)),
+                "lex.surface_len": float(len(token.surface)),
+                "lex.proper_noun": float(token.pos == "proper_noun"),
+            }
+            normalized_surface = unicodedata.normalize("NFKC", token.surface)
+            if normalized_surface and all("\u4e00" <= char <= "\u9fff" for char in normalized_surface):
+                script = "kanji"
+            elif normalized_surface and all("\u3040" <= char <= "\u309f" for char in normalized_surface):
+                script = "hiragana"
+            elif normalized_surface and all("\u30a0" <= char <= "\u30ff" for char in normalized_surface):
+                script = "katakana"
+            else:
+                script = "other"
+            features[f"lex.script.{script}"] = 1.0
             if token.pos == "unknown":
-                return {"lex.unknown": 1.0}
-            if token.pos == "literal":
-                return {"lex.literal": 1.0}
-            if token.raw_cost is not None:
+                features["lex.unknown"] = 1.0
+            elif token.pos == "literal":
+                features["lex.literal"] = 1.0
+            elif token.raw_cost is not None:
                 from .ipadic import map_ipadic_cost
-                features = {"lex.ipadic_cost_mapped": map_ipadic_cost(token.raw_cost)}
-                if any("ァ" <= char <= "ヺ" for char in unicodedata.normalize("NFKC", token.surface)):
+                features["lex.ipadic_cost_mapped"] = map_ipadic_cost(token.raw_cost)
+                if any("ァ" <= char <= "ヺ" for char in normalized_surface):
                     features["lex.katakana_surface"] = 1.0
-                return features
-            # v1 dictionaries and hand-written overlays have no raw IPADIC cost.
-            if token.source == "overlay":
-                return {"lex.base_cost": token.cost}
-            return {"lex.base_cost": token.cost}
+            else:
+                # v1 dictionaries and hand-written overlays have no raw IPADIC cost.
+                features["lex.base_cost"] = token.cost
+            return features
         if self.spec.id != "legacy_v1":
             raise ValueError(f"unsupported feature specification: {self.spec.id!r}")
         return {"lex.base_cost": edge.token.cost}

@@ -269,7 +269,7 @@ def backward_viterbi(lattice: Lattice, scorer: Scorer | None = None) -> tuple[fl
 
     # continuation[position][previous_pos] is the cost after a token with
     # previous_pos has already been selected at that position.
-    continuation: list[dict[str, float]] = [{} for _ in lattice.nodes]
+    continuation: list[dict[Hashable, float]] = [{} for _ in lattice.nodes]
     node_costs = [math.inf] * len(lattice.nodes)
     node_costs[terminal] = 0.0
 

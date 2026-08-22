@@ -6,8 +6,14 @@ from pathlib import Path
 import json
 
 from beme.dictionary import Dictionary
-from beme.features import FeatureExtractor, feature_delta, legacy_v1_extractor, path_features
-from beme.lattice import build_lattice, k_best_viterbi
+from beme.features import (
+    FeatureExtractor,
+    decomposed_v1_extractor,
+    feature_delta,
+    legacy_v1_extractor,
+    path_features,
+)
+from beme.lattice import LatticeEdge, Token, build_lattice, k_best_viterbi
 from beme.scorer import LinearScorer
 from beme.weights import DEFAULT_WEIGHTS_PATH, Weights
 
@@ -31,6 +37,29 @@ def test_path_features_reconstruct_legacy_cost() -> None:
         for path in k_best_viterbi(lattice, beam_width=5, scorer=scorer):
             features = path_features(path, extractor)
             assert sum(scorer.weights[name] * value for name, value in features.items()) == path.cost
+
+
+def test_decomposed_features_include_declared_lexical_signals() -> None:
+    extractor = decomposed_v1_extractor()
+    overlay = LatticeEdge(
+        0, 2, Token("にほん", "日本", "proper_noun", 0.65, source="overlay")
+    )
+    ipadic = LatticeEdge(
+        0, 2, Token("きしゃ", "汽車", "noun", 2.0, raw_cost=3500, source="ipadic")
+    )
+
+    overlay_features = extractor.lexical_features(overlay)
+    ipadic_features = extractor.lexical_features(ipadic)
+    assert overlay_features["lex.source.overlay"] == 1.0
+    assert overlay_features["lex.overlay_cost"] == 0.65
+    assert overlay_features["lex.reading_len"] == 3.0
+    assert overlay_features["lex.surface_len"] == 2.0
+    assert overlay_features["lex.script.kanji"] == 1.0
+    assert overlay_features["lex.proper_noun"] == 1.0
+    assert ipadic_features["lex.source.overlay"] == 0.0
+    assert ipadic_features["lex.reading_len"] == 3.0
+    assert ipadic_features["lex.surface_len"] == 2.0
+    assert ipadic_features["lex.script.kanji"] == 1.0
 
 
 def test_feature_json_round_trip(tmp_path: Path) -> None:

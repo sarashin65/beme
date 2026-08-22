@@ -10,7 +10,7 @@ import sys
 from typing import Sequence
 
 from .converter import Converter, ConversionResult
-from .features import legacy_v1_extractor
+from .features import decomposed_v1_extractor, legacy_v1_extractor
 from .scorer import LinearScorer
 from .weights import DEFAULT_WEIGHTS_PATH, Weights
 from .reranker import (
@@ -200,11 +200,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command != "convert":
         parser.error("a command is required")
     try:
+        with args.weights.open(encoding="utf-8") as stream:
+            weight_spec = json.load(stream).get("feature_spec", "legacy_v1")
+        weights = Weights.load(args.weights, feature_spec=weight_spec)
+        extractor = (
+            decomposed_v1_extractor()
+            if weights.feature_spec == "decomposed_v1"
+            else legacy_v1_extractor()
+        )
         converter = Converter.from_tsv(
             args.dictionary,
             beam_width=args.beam_width,
             reranker=_build_reranker(args),
-            scorer=LinearScorer(legacy_v1_extractor(), Weights.load(args.weights)),
+            scorer=LinearScorer(extractor, weights),
         )
         result = converter.convert(
             args.reading,
