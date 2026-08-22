@@ -228,6 +228,38 @@ pytest -q
 
 辞書検証、ラティス接続、未知語フォールバック、複数分割、候補の一意性と決定性、確信度の境界、CLI、リランカ契約、前文・後方文脈による順位変更、文脈付き NDCG/MRR に加え、IPADIC の読み・POS・コスト変換、重複排除、記号・不正読み除外、手作り優先語の上書き、全角・半角・混在 surface のカタカナ `+1.0` と overlay 非適用、カタカナ→ひらがな入力アダプタ、句読点保持、Levenshtein/CER、Mozc の正例・禁止誤変換・順位・スキップ規則、導入データ件数（200/500）、手作り14件の維持をテストします。LLM / Cross-Encoder 用テストは実モデルをロードせず、決定的な fake backend で尤度・関連度と Viterbi コストの結合、バッチ入力、`save_state` / `load_state`、ロード失敗時のフォールバックを検証します。
 
+## Phase 2 学習
+
+Phase 2 の d1 学習データはリポジトリ外から供給される必要があります。`data/d1/train.jsonl`（10,000件）、`dev.jsonl`（1,000件）、`test.jsonl`（2,000件）は Wikipedia `20231101.ja` を MeCab でかな化した記事 disjoint split です。d1 は gitignore 対象の外部データであり、存在しない場合に synthetic data で代用しないでください。詳細な実測値は [`docs/missions/issue9-phase2/phase2-report.md`](docs/missions/issue9-phase2/phase2-report.md) を参照してください。
+
+固定条件で学習します。
+
+```bash
+uv run python scripts/train_scorer.py \
+  --train data/d1/train.jsonl --dev data/d1/dev.jsonl --test data/d1/test.jsonl \
+  --dictionary data/dictionary_v2.tsv \
+  --initial-weights data/weights/decomposed_v1.json \
+  --epochs 5 --learning-rate 0.1 --seed 9 \
+  --output-weights artifacts/issue9-phase2/run1/weights.json \
+  --output-report artifacts/issue9-phase2/run1/report.json
+```
+
+再現性は独立した出力先で実行し、weights と report を比較します。
+
+```bash
+# 上記コマンドの出力先を run2/weights.json と run2/report.json に変更
+cmp artifacts/issue9-phase2/run1/weights.json artifacts/issue9-phase2/run2/weights.json
+cmp artifacts/issue9-phase2/run1/report.json artifacts/issue9-phase2/run2/report.json
+```
+
+学習済み weights は別プロセスの既存評価へ明示的に渡します。実モデルは不要です。
+
+```bash
+uv run python scripts/evaluate.py --suite all --reranker mock \
+  --dictionary data/dictionary_v2.tsv \
+  --weights artifacts/issue9-phase2/run1/weights.json --json
+```
+
 ## 制約と今後
 
 - 既定辞書は IPADIC の活用形・固有名詞を含む 349,043 エントリです。NEologd の新語や接続コスト行列は未導入で、TSV ロード時の最大 RSS はクリーンな CLI 実測で約 156 MiB です。
