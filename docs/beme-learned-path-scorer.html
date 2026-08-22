@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="BeMEを手作りコスト調整から学習可能なラティス経路スコアラーへ移行する設計案。">
+  <title>BeMEを「辞書学習」から「経路学習」へ進める</title>
+  <style>
+    :root { --text:#24292f; --muted:#59636e; --border:#d0d7de; --soft:#f6f8fa; --link:#0969da; --dark:#1f2328; --note:#fff8c5; --good:#dafbe1; }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin:0; background:#fff; color:var(--text); font:17px/1.85 -apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Kaku Gothic ProN","Yu Gothic",sans-serif; }
+    article { width:min(100% - 40px, 840px); margin:auto; padding:64px 0 100px; }
+    header { padding-bottom:32px; border-bottom:1px solid var(--border); }
+    h1 { margin:0 0 16px; font-size:clamp(2rem,5vw,3rem); line-height:1.25; letter-spacing:-.025em; }
+    .lead { margin:0; color:var(--muted); font-size:1.08rem; }
+    nav { margin:32px 0 56px; padding:20px 24px; border:1px solid var(--border); border-radius:8px; background:var(--soft); }
+    nav strong { display:block; margin-bottom:8px; }
+    nav ol { margin:0; padding-left:1.5rem; }
+    nav a { color:var(--link); text-decoration:none; }
+    nav a:hover { text-decoration:underline; }
+    section { margin-top:64px; scroll-margin-top:24px; }
+    h2 { margin:0 0 24px; padding-bottom:10px; border-bottom:1px solid var(--border); font-size:1.65rem; line-height:1.35; }
+    h3 { margin:36px 0 12px; font-size:1.15rem; }
+    p { margin:0 0 20px; }
+    li { margin:.35em 0; }
+    code { padding:.15em .35em; border-radius:4px; background:var(--soft); font: .9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    pre { overflow-x:auto; margin:20px 0 28px; padding:18px 20px; border-radius:8px; background:var(--dark); color:#f0f3f6; font:.9rem/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    pre code { padding:0; background:transparent; color:inherit; font:inherit; }
+    .math { overflow-x:auto; margin:24px 0; padding:16px 20px; border-left:4px solid #6e7781; background:var(--soft); font-size:1.18rem; text-align:center; }
+    math { font-size:1.12em; }
+    .note,.decision { margin:28px 0; padding:16px 20px; border-left:4px solid #d4a72c; background:var(--note); }
+    .decision { border-left-color:#1a7f37; background:var(--good); }
+    table { width:100%; margin:20px 0 28px; border-collapse:collapse; font-size:.92rem; }
+    th,td { padding:10px 12px; border:1px solid var(--border); text-align:left; vertical-align:top; }
+    th { background:var(--soft); }
+    .flow { margin:24px 0; padding:20px; border:1px solid var(--border); border-radius:8px; background:var(--soft); }
+    .flow pre { margin:0; }
+    .roadmap { counter-reset:step; list-style:none; padding:0; }
+    .roadmap li { position:relative; margin:0; padding:0 0 24px 52px; }
+    .roadmap li::before { counter-increment:step; content:counter(step); position:absolute; left:0; top:.1em; display:grid; width:32px; height:32px; place-items:center; border-radius:50%; background:var(--dark); color:#fff; font-weight:700; }
+    .roadmap li:not(:last-child)::after { content:""; position:absolute; left:15px; top:34px; bottom:0; width:2px; background:var(--border); }
+    @media(max-width:600px){ body{font-size:16px} article{width:min(100% - 28px,840px);padding-top:36px} section{margin-top:48px} table{display:block;overflow-x:auto;white-space:nowrap} }
+  </style>
+</head>
+<body>
+<article>
+  <header>
+    <h1>BeMEを「辞書学習」から<br>「経路学習」へ進める</h1>
+    <p class="lead">ラティス探索は残し、手作りコストモデルを学習可能な経路スコアラーへ置き換える設計案。</p>
+  </header>
+
+  <nav aria-label="目次">
+    <strong>目次</strong>
+    <ol>
+      <li><a href="#premise">前提：いまはパラメータ調整の段階ではない</a></li>
+      <li><a href="#keep-replace">残すものと置き換えるもの</a></li>
+      <li><a href="#path-learning">辞書学習ではなく経路学習</a></li>
+      <li><a href="#features">何を特徴量にするか</a></li>
+      <li><a href="#perceptron">最初の学習器</a></li>
+      <li><a href="#gold-path">正解経路をどう決めるか</a></li>
+      <li><a href="#training-data">訓練データをどう作るか</a></li>
+      <li><a href="#ipadic">IPADICの位置づけ</a></li>
+      <li><a href="#neural">ニューラルモデルとの役割分担</a></li>
+      <li><a href="#roadmap">実装ロードマップ</a></li>
+    </ol>
+  </nav>
+
+  <section id="premise">
+    <h2>1. 前提：いまはパラメータ調整の段階ではない</h2>
+    <p>現在のBeMEは、複数の手作りルールを足し合わせて経路を採点しています。</p>
+    <pre><code>IPADIC由来の生起コスト
++ 16 POSの手書き接続コスト
++ 手作りoverlay
++ カタカナ表層ペナルティ
++ 個別の補正</code></pre>
+    <p>この目的関数を固定したまま値だけを調整すると、補正同士が依存し始めます。</p>
+    <pre><code>接続報酬が弱い
+  ↓
+助詞の生起コストをoverlayで安くする
+  ↓
+一文字語が強くなりすぎる
+  ↓
+別のペナルティを追加する</code></pre>
+    <p>改善できたとしても、「なぜその値なのか」「別の評価セットでも効くのか」を説明しにくくなります。</p>
+    <div class="decision"><strong>設計判断：</strong> 現行モデルを固定してマジックナンバーを増やすのではなく、正解経路と誤り経路の差から採点関数を学習できる構造へ移行する。</div>
+  </section>
+
+  <section id="keep-replace">
+    <h2>2. 残すものと置き換えるもの</h2>
+    <h3>残すもの</h3>
+    <p>ラティスとDPは、読みから表記を選ぶ問題に自然に適合しています。</p>
+    <pre><code>入力位置を頂点にする
+辞書候補をedgeにする
+始点から終点までの最小コスト経路を探す
+K-best経路を列挙する</code></pre>
+
+    <h3>置き換えるもの</h3>
+    <p>置き換えるべきなのは、ラティスではなく採点器です。</p>
+    <pre><code>map_ipadic_cost()
+_TRANSITION_COSTS
+overlayの絶対的な低コスト
+カタカナ +1.0</code></pre>
+    <p>これらを独立した規則として積み重ねる代わりに、経路から特徴量を抽出し、その重みをデータから学習します。</p>
+  </section>
+
+  <section id="path-learning">
+    <h2>3. 「辞書学習」ではなく「経路学習」にする</h2>
+    <p>パス <math><mi>P</mi></math> のコストを、特徴量の線形結合として定義します。</p>
+    <div class="math">
+      <math display="block">
+        <msub><mi>C</mi><mi>θ</mi></msub><mo>(</mo><mi>P</mi><mo>)</mo>
+        <mo>=</mo>
+        <msup><mi>θ</mi><mi>T</mi></msup><mi>Φ</mi><mo>(</mo><mi>P</mi><mo>)</mo>
+      </math>
+    </div>
+    <ul>
+      <li><math><mi>Φ</mi><mo>(</mo><mi>P</mi><mo>)</mo></math>：経路から抽出した特徴量</li>
+      <li><math><mi>θ</mi></math>：訓練データから学習する重み</li>
+    </ul>
+    <p>単語edgeの特徴と、隣接edge間の特徴に分けると、</p>
+    <div class="math">
+      <math display="block">
+        <msub><mi>C</mi><mi>θ</mi></msub><mo>(</mo><mi>P</mi><mo>)</mo>
+        <mo>=</mo>
+        <munder><mo>∑</mo><mrow><mi>e</mi><mo>∈</mo><mi>P</mi></mrow></munder>
+        <msubsup><mi>θ</mi><mi>lex</mi><mi>T</mi></msubsup><mi>φ</mi><mo>(</mo><mi>e</mi><mo>)</mo>
+        <mo>+</mo>
+        <munder><mo>∑</mo><mrow><mo>(</mo><mi>e</mi><mo>,</mo><mi>f</mi><mo>)</mo><mo>∈</mo><mi>P</mi></mrow></munder>
+        <msubsup><mi>θ</mi><mi>trans</mi><mi>T</mi></msubsup><mi>ψ</mi><mo>(</mo><mi>e</mi><mo>,</mo><mi>f</mi><mo>)</mo>
+      </math>
+    </div>
+    <p>となります。</p>
+    <div class="note">現在のモデルは、<math><mi>φ</mi><mo>(</mo><mi>e</mi><mo>)</mo></math> がほぼIPADIC生起コストだけ、<math><mi>ψ</mi><mo>(</mo><mi>e</mi><mo>,</mo><mi>f</mi><mo>)</mo></math> が16 POSの手書き表だけ、という特殊ケースとみなせます。</div>
+  </section>
+
+  <section id="features">
+    <h2>4. 何を特徴量にするか</h2>
+    <h3>単語edgeの特徴量</h3>
+    <table>
+      <thead><tr><th>種類</th><th>例</th><th>狙い</th></tr></thead>
+      <tbody>
+        <tr><td>辞書属性</td><td>reading、surface、POS、詳細POS</td><td>語彙と品詞の違いを表現</td></tr>
+        <tr><td>接続属性</td><td>left_id、right_id、活用形</td><td>粗いPOSで失った接続状態を復元</td></tr>
+        <tr><td>形状</td><td>読み長、表層長、漢字・かな・カタカナ</td><td>長語、無変換、カタカナ漏れを制御</td></tr>
+        <tr><td>頻度</td><td>コーパス頻度、読み内の表記頻度</td><td>IMEとして一般的な表記を優先</td></tr>
+        <tr><td>出所</td><td>IPADIC、overlay、追加辞書、未知語</td><td>候補生成元ごとの信頼度を学習</td></tr>
+        <tr><td>既存値</td><td>IPADIC word cost</td><td>既存知識を初期特徴として利用</td></tr>
+      </tbody>
+    </table>
+
+    <h3>edge間の特徴量</h3>
+    <ul>
+      <li>前POS → 現POS</li>
+      <li>前right_id → 現left_id</li>
+      <li>前の活用形 → 現在の品詞</li>
+      <li>前の表層末尾 → 現在の表層先頭</li>
+      <li>単語長・読み長の組み合わせ</li>
+      <li>IPADIC matrix cost</li>
+    </ul>
+    <p>特徴量として保持することと、その値を目的関数として無条件に信頼することは別です。IPADICの値も、学習器が重みを決める入力の一つへ下げます。</p>
+  </section>
+
+  <section id="perceptron">
+    <h2>5. 最初の学習器にはstructured perceptronが合う</h2>
+    <p>最初から巨大なニューラルモデルにする必要はありません。現在のViterbi探索をそのまま利用できるstructured perceptronが、最初の学習器として実装しやすい選択です。</p>
+    <p>各訓練例について、次を繰り返します。</p>
+    <ol>
+      <li>現在の重みで1-best経路を求める</li>
+      <li>正解表記を生成する経路をラティスから探す</li>
+      <li>正解経路と予測経路の特徴量差で重みを更新する</li>
+    </ol>
+    <div class="math">
+      <math display="block">
+        <mi>θ</mi><mo>←</mo><mi>θ</mi><mo>+</mo><mi>η</mi>
+        <mo>(</mo>
+        <mi>Φ</mi><mo>(</mo><msub><mi>P</mi><mi>gold</mi></msub><mo>)</mo>
+        <mo>−</mo>
+        <mi>Φ</mi><mo>(</mo><msub><mi>P</mi><mi>pred</mi></msub><mo>)</mo>
+        <mo>)</mo>
+      </math>
+    </div>
+    <p>例えば、</p>
+    <pre><code>正解:  受け + て
+予測:  受け手</code></pre>
+    <p>なら、学習によって次の方向へ重みが動きます。</p>
+    <ul>
+      <li>「動詞連用形 → 接続助詞」の特徴を有利にする</li>
+      <li>「受け」「て」の語彙特徴を有利にする</li>
+      <li>この文脈で「受け手」を選んだ特徴を不利にする</li>
+    </ul>
+    <p>人間が <code>("verb", "particle"): -1.0</code> のような値を決める必要がなくなります。</p>
+  </section>
+
+  <section id="gold-path">
+    <h2>6. 正解経路をどう決めるか</h2>
+    <p>正解表記が与えられても、正解の形態素分割が与えられるとは限りません。</p>
+    <pre><code>入力読み: にんむではかれからむせんでしじをうけて
+正解表記: 任務では彼から無線で指示を受けて</code></pre>
+    <p>そこで、オラクル分析と同じ制約付きDPを利用します。</p>
+    <pre><code>状態 = 入力読み位置
+     × 正解表記位置
+     × 直前の接続状態</code></pre>
+    <p>正解表記を生成する経路が複数ある場合は、現在のモデルで最もスコアが良い正解経路を選びます。</p>
+    <div class="math">
+      <math display="block">
+        <msub><mi>P</mi><mi>gold</mi></msub>
+        <mo>=</mo>
+        <munder><mi>argmin</mi><mrow><mi>P</mi><mo>:</mo><mi>surface</mi><mo>(</mo><mi>P</mi><mo>)</mo><mo>=</mo><mi>target</mi></mrow></munder>
+        <msub><mi>C</mi><mi>θ</mi></msub><mo>(</mo><mi>P</mi><mo>)</mo>
+      </math>
+    </div>
+    <p>正解表記を作る経路が存在しない場合は学習スコアの問題ではなく、候補生成・辞書coverageの問題として別に記録します。</p>
+  </section>
+
+  <section id="training-data">
+    <h2>7. 訓練データをどう作るか</h2>
+    <p>日本語本文コーパスから、読みと正解表記のペアを合成できます。</p>
+    <pre><code>元の本文:
+  彼から無線で指示を受けて
+
+形態素解析から読みを生成:
+  かれからむせんでしじをうけて
+
+訓練ペア:
+  input  = かれからむせんでしじをうけて
+  target = 彼から無線で指示を受けて</code></pre>
+    <p>読み生成にMeCabを使うと解析器のバイアスは入ります。それでも、単語の絶対頻度を数えるだけの学習より、読みから正解文を生成するIMEの目的に近くなります。</p>
+    <div class="decision"><strong>学習目的の変更：</strong> 「頻出単語を安くする」から、「正解文を生成する経路を誤変換経路より安くする」へ。</div>
+    <p>データは必ずtrain・development・testへ分割し、ハイパーパラメータ選択と最終評価を分離します。AJIMEE、Mozc、handmadeは分布の異なる回帰検出として併用します。</p>
+  </section>
+
+  <section id="ipadic">
+    <h2>8. IPADICは「正解」ではなく特徴量の一つにする</h2>
+    <p>IPADICの情報を捨てる必要はありません。しかし、形態素解析向け目的関数をIMEへ忠実に移植する必要もありません。</p>
+    <div class="math">
+      <math display="block">
+        <mi>C</mi><mo>(</mo><mi>e</mi><mo>,</mo><mi>f</mi><mo>)</mo>
+        <mo>=</mo>
+        <msub><mi>θ</mi><mn>1</mn></msub><msub><mi>C</mi><mi>IPADIC-word</mi></msub><mo>(</mo><mi>f</mi><mo>)</mo>
+        <mo>+</mo>
+        <msub><mi>θ</mi><mn>2</mn></msub><msub><mi>C</mi><mi>matrix</mi></msub><mo>(</mo><mi>e</mi><mo>,</mo><mi>f</mi><mo>)</mo>
+        <mo>+</mo>
+        <msub><mi>θ</mi><mn>3</mn></msub><mi>I</mi><mo>[</mo><mi>katakana</mi><mo>]</mo>
+        <mo>+</mo>
+        <msub><mi>θ</mi><mn>4</mn></msub><mi>logfreq</mi><mo>(</mo><mi>f</mi><mo>)</mo>
+        <mo>+</mo><mo>…</mo>
+      </math>
+    </div>
+    <p>学習結果として、例えば次のようなバランスを獲得できます。</p>
+    <pre><code>IPADIC生起コスト      弱めに利用
+matrix接続コスト      0.2倍程度で利用
+カタカナ表層         少し不利
+読み条件付き頻度     強く利用
+overlay              出所特徴として利用</code></pre>
+    <p><code>matrix.def</code>を使うか捨てるかの二択ではなくなります。</p>
+  </section>
+
+  <section id="neural">
+    <h2>9. ニューラルモデルはその次に置く</h2>
+    <div class="flow"><pre><code>候補生成
+  辞書・数字・未知語・固有名詞
+        ↓
+局所的な経路スコア
+  学習済み生起特徴 + 学習済み接続特徴
+        ↓
+文全体のリランク
+  Transformer / Cross-Encoder / 言語モデル</code></pre></div>
+    <p>局所モデルはDP可能な形を維持し、正解を含む質の良いK-bestを生成します。その後、局所接続だけでは解けない表記を文全体のモデルで選びます。</p>
+    <pre><code>鳴る / 成る
+挙げる / 上げる
+復讐 / 復習
+制作 / 政策</code></pre>
+    <p>最初からend-to-endのseq2seqへ移る選択肢もありますが、失敗箇所の説明、辞書制約、固有名詞制御、必要データ量の面で代償があります。現在のBeMEなら、まず学習可能なラティススコアラーへ進む方が、既存資産を活かしながら抜本的に変えられます。</p>
+  </section>
+
+  <section id="roadmap">
+    <h2>10. 実装ロードマップ</h2>
+    <ol class="roadmap">
+      <li><strong>現行baselineを固定する</strong><br>評価設定、辞書リビジョン、AJIMEE・Mozc・handmadeの結果を再現可能にする。</li>
+      <li><strong>辞書スキーマを拡張する</strong><br>詳細POS、活用形、left/right ID、辞書出所、元コストを保持する。</li>
+      <li><strong>採点器を分離する</strong><br><code>FeatureExtractor</code>と<code>LinearScorer</code>を導入し、探索実装からコスト定義を切り離す。</li>
+      <li><strong>正解表記制約付きオラクルDPを実装する</strong><br>正解文字列を生成する経路を訓練時に取得できるようにする。</li>
+      <li><strong>structured perceptronを実装する</strong><br>正解経路と予測経路の特徴量差から重みを更新する。</li>
+      <li><strong>train / development / testを分離する</strong><br>学習、ハイパーパラメータ選択、最終評価を混ぜない。</li>
+      <li><strong>候補coverageを改善する</strong><br>数字、未知語、カタカナ語、固有名詞について正解経路が存在する割合を上げる。</li>
+      <li><strong>最後に文脈リランカを学習する</strong><br>oracle recallが十分になってから、文全体の意味でK-bestを並べ替える。</li>
+    </ol>
+    <div class="decision"><strong>最終方針：</strong> ラティス探索は残す。現在の手作りコストモデルは固定せず、正解経路と誤り経路の差から学習する。既存の辞書コスト学習PoCは、この方向へ進むための最初の証拠として位置づける。</div>
+  </section>
+</article>
+</body>
+</html>

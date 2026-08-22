@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="BeMEがIPADICの単語生起コストと接続コストをどう扱い、ラティス上で経路を選ぶのかを図解します。">
+  <title>BeMEのラティスとコストを、図から理解する</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17211d;
+      --muted: #66716b;
+      --paper: #f7f5ef;
+      --card: #fffefa;
+      --line: #d8ddd7;
+      --green: #176b54;
+      --green-soft: #dff1e9;
+      --orange: #d96831;
+      --orange-soft: #fae9df;
+      --blue: #356e9b;
+      --blue-soft: #e5eef6;
+      --red: #a5453b;
+      --code: #1e2924;
+      --shadow: 0 18px 45px rgba(31, 44, 37, .08);
+      --radius: 20px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 8% 4%, rgba(217, 104, 49, .10), transparent 24rem),
+        radial-gradient(circle at 92% 18%, rgba(23, 107, 84, .10), transparent 27rem),
+        var(--paper);
+      color: var(--ink);
+      font-family: Inter, "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+      line-height: 1.8;
+    }
+
+    button, code { font: inherit; }
+    a { color: var(--green); text-underline-offset: .2em; }
+    button:focus-visible, a:focus-visible { outline: 3px solid #ebad55; outline-offset: 3px; }
+    .page { width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+
+    .hero { padding: 82px 0 54px; }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      margin: 0 0 18px;
+      color: var(--green);
+      font-size: .78rem;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before { content: ""; width: 30px; height: 2px; background: currentColor; }
+    h1 {
+      max-width: 900px;
+      margin: 0;
+      font-family: Georgia, "Yu Mincho", serif;
+      font-size: clamp(2.45rem, 6.3vw, 5.25rem);
+      font-weight: 500;
+      letter-spacing: -.045em;
+      line-height: 1.08;
+    }
+    .hero-copy { max-width: 760px; margin: 28px 0 0; color: var(--muted); font-size: 1.12rem; }
+    .hero-copy strong { color: var(--ink); }
+    .thesis {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      max-width: 860px;
+      margin-top: 38px;
+      padding: 22px 24px;
+      border: 1px solid rgba(23, 107, 84, .24);
+      border-radius: var(--radius);
+      background: rgba(255, 254, 250, .78);
+      box-shadow: var(--shadow);
+    }
+    .thesis .number { color: var(--green); font: 700 1.4rem/1 Georgia, serif; }
+    .thesis p { margin: 0; }
+
+    .toc-wrap { position: sticky; top: 0; z-index: 10; border-block: 1px solid var(--line); background: rgba(247, 245, 239, .9); backdrop-filter: blur(12px); }
+    .toc { display: flex; gap: 28px; overflow-x: auto; padding: 12px 0; scrollbar-width: none; }
+    .toc::-webkit-scrollbar { display: none; }
+    .toc a { flex: none; color: var(--muted); font-size: .86rem; font-weight: 700; text-decoration: none; }
+    .toc a:hover { color: var(--green); }
+
+    main { padding: 56px 0 100px; }
+    section { scroll-margin-top: 78px; margin-top: 96px; }
+    section:first-child { margin-top: 0; }
+    .section-head { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 18px; align-items: start; margin-bottom: 34px; }
+    .section-no { color: var(--orange); font: 700 1rem/1.2 Georgia, serif; letter-spacing: .08em; }
+    h2 { margin: 0; font: 500 clamp(1.85rem, 4vw, 3rem)/1.2 Georgia, "Yu Mincho", serif; letter-spacing: -.025em; }
+    .section-lead { max-width: 760px; margin: 12px 0 0; color: var(--muted); }
+    h3 { margin: 0 0 12px; font-size: 1.08rem; }
+    p { margin: 0 0 1em; }
+
+    .card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
+    .term-switcher { padding: 24px; }
+    .switch-row { display: flex; justify-content: space-between; gap: 20px; align-items: center; margin-bottom: 28px; }
+    .switch-row p { margin: 0; color: var(--muted); font-size: .92rem; }
+    .segmented { display: inline-flex; flex: none; padding: 4px; border-radius: 999px; background: #ecece6; }
+    .segmented button { border: 0; border-radius: 999px; padding: 8px 14px; background: transparent; color: var(--muted); cursor: pointer; font-size: .83rem; font-weight: 800; }
+    .segmented button[aria-pressed="true"] { background: var(--ink); color: white; box-shadow: 0 3px 10px rgba(0,0,0,.14); }
+
+    .view-panel[hidden] { display: none; }
+    .word-graph-stage { overflow-x: auto; padding: 8px 0 20px; }
+    .word-graph {
+      position: relative;
+      width: 930px;
+      height: 430px;
+      margin: 0 auto;
+      border-radius: 16px;
+      background:
+        linear-gradient(rgba(23,33,29,.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(23,33,29,.035) 1px, transparent 1px),
+        #fbfbf7;
+      background-size: 32px 32px;
+    }
+    .graph-node {
+      position: absolute;
+      z-index: 3;
+      display: grid;
+      width: 138px;
+      min-height: 68px;
+      place-content: center;
+      border: 2px solid var(--green);
+      border-radius: 14px;
+      background: var(--card);
+      box-shadow: 0 10px 24px rgba(23,107,84,.12);
+      text-align: center;
+      transform: translate(-50%, -50%);
+    }
+    .graph-node strong { font-size: 1rem; line-height: 1.25; }
+    .graph-node small { margin-top: 3px; color: var(--green); font: .7rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .graph-node.terminal { width: 70px; min-height: 70px; border-color: var(--ink); border-radius: 50%; background: var(--ink); color: white; box-shadow: 0 10px 22px rgba(23,33,29,.16); }
+    .graph-node.terminal small { color: #bbc8c1; }
+    .graph-node.alt { border-color: var(--orange); }
+    .graph-node.alt small { color: var(--orange); }
+    .graph-node.fallback { border-style: dashed; border-color: #9aa49e; box-shadow: none; opacity: .76; }
+    .graph-node.fallback small { color: var(--muted); }
+    .n-bos { left: 55px; top: 215px; }
+    .n-uke { left: 300px; top: 80px; }
+    .n-ukete { left: 300px; top: 215px; }
+    .n-u { left: 230px; top: 350px; }
+    .n-te { left: 600px; top: 80px; }
+    .n-ke { left: 455px; top: 350px; }
+    .n-te-fallback { left: 680px; top: 350px; }
+    .n-eos { left: 875px; top: 215px; }
+    .connector {
+      position: absolute;
+      z-index: 1;
+      height: 3px;
+      background: #8ca198;
+      transform-origin: 0 50%;
+    }
+    .connector::after { content: ""; position: absolute; right: -1px; top: -5px; border-left: 9px solid #8ca198; border-block: 6px solid transparent; }
+    .connector.primary { background: var(--green); }
+    .connector.primary::after { border-left-color: var(--green); }
+    .connector.alt { background: var(--orange); }
+    .connector.alt::after { border-left-color: var(--orange); }
+    .c-bos-uke { left: 84px; top: 195px; width: 190px; transform: rotate(-30deg); }
+    .c-bos-ukete { left: 90px; top: 215px; width: 140px; }
+    .c-bos-u { left: 84px; top: 237px; width: 125px; transform: rotate(38deg); }
+    .c-uke-te { left: 370px; top: 80px; width: 160px; }
+    .c-te-eos { left: 659px; top: 100px; width: 182px; transform: rotate(32deg); }
+    .c-ukete-eos { left: 370px; top: 215px; width: 470px; }
+    .c-u-ke { left: 299px; top: 350px; width: 86px; }
+    .c-ke-te { left: 524px; top: 350px; width: 86px; }
+    .c-te2-eos { left: 748px; top: 334px; width: 113px; transform: rotate(-48deg); }
+    .edge-label { position: absolute; z-index: 2; padding: 3px 7px; border-radius: 999px; background: var(--blue-soft); color: var(--blue); font: 700 .64rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .label-uke-te { left: 430px; top: 55px; }
+    .label-ukete { left: 590px; top: 190px; color: var(--orange); background: var(--orange-soft); }
+    .graph-caption { display: flex; justify-content: center; gap: 26px; padding-top: 12px; color: var(--muted); font-size: .78rem; }
+    .graph-caption span { display: inline-flex; align-items: center; gap: 7px; }
+    .graph-caption i { display: inline-block; width: 11px; height: 11px; border: 2px solid var(--green); border-radius: 3px; background: white; }
+    .graph-caption i.line { width: 20px; height: 3px; border: 0; border-radius: 0; background: #8ca198; }
+    .mapping-note { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 0 16px 18px; }
+    .mapping-note div { padding: 13px; border-radius: 10px; background: #f2f3ee; font-size: .78rem; text-align: center; }
+    .mapping-note code { display: block; color: var(--green); font-weight: 800; }
+
+    .lattice-stage { position: relative; min-height: 320px; overflow-x: auto; padding: 26px 12px 20px; }
+    .lattice { position: relative; min-width: 720px; height: 260px; }
+    .position { position: absolute; top: 120px; z-index: 3; width: 52px; transform: translateX(-50%); text-align: center; }
+    .position:nth-of-type(1) { left: 7%; }
+    .position:nth-of-type(2) { left: 35%; }
+    .position:nth-of-type(3) { left: 63%; }
+    .position:nth-of-type(4) { left: 93%; }
+    .dot { display: grid; width: 32px; height: 32px; margin: 0 auto 8px; place-items: center; border: 7px solid var(--card); border-radius: 50%; background: var(--ink); box-shadow: 0 0 0 1px var(--ink); color: white; font-size: .68rem; }
+    .pos-label { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+    .char { position: absolute; top: 178px; transform: translateX(-50%); font: 600 1.25rem/1 Georgia, serif; }
+    .char.c1 { left: 21%; } .char.c2 { left: 49%; } .char.c3 { left: 78%; }
+
+    .token-edge { position: absolute; z-index: 2; height: 3px; background: var(--green); transform-origin: left center; }
+    .token-edge::after { content: ""; position: absolute; right: -1px; top: -5px; border-left: 9px solid var(--green); border-block: 6px solid transparent; }
+    .token-edge .token-card { position: absolute; left: 50%; width: max-content; min-width: 120px; transform: translate(-50%, -100%); padding: 9px 12px; border: 1px solid rgba(23,107,84,.3); border-radius: 11px; background: var(--green-soft); text-align: center; box-shadow: 0 7px 20px rgba(23,107,84,.1); }
+    .token-card strong { display: block; line-height: 1.2; }
+    .token-card small { color: var(--green); font-size: .72rem; }
+    .e-uke { left: 7%; top: 136px; width: 56%; }
+    .e-te { left: 63%; top: 136px; width: 30%; }
+    .e-ukete { left: 7%; top: 55px; width: 86%; background: var(--orange); }
+    .e-ukete::after { border-left-color: var(--orange); }
+    .e-ukete .token-card { transform: translate(-50%, 12px); border-color: rgba(217,104,49,.35); background: var(--orange-soft); }
+    .e-ukete .token-card small { color: var(--orange); }
+    .boundary { position: absolute; left: 63%; top: 105px; z-index: 4; transform: translateX(-50%); padding: 4px 8px; border-radius: 999px; background: var(--blue-soft); color: var(--blue); font-size: .68rem; font-weight: 800; }
+
+    .legend { display: flex; flex-wrap: wrap; gap: 18px; margin: 10px 0 0; padding: 18px 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: .8rem; }
+    .legend span { display: inline-flex; gap: 8px; align-items: center; }
+    .legend i { width: 18px; height: 4px; background: var(--green); }
+    .legend i.orange { background: var(--orange); }
+    .legend i.blue { background: var(--blue); }
+
+    .callout { margin-top: 24px; padding: 22px 24px; border-left: 4px solid var(--orange); border-radius: 4px var(--radius) var(--radius) 4px; background: var(--orange-soft); }
+    .callout p:last-child { margin-bottom: 0; }
+    .callout strong { color: #7d321b; }
+
+    .pipeline { display: grid; grid-template-columns: 1fr auto 1fr; gap: 18px; align-items: center; }
+    .record { min-width: 0; padding: 24px; }
+    .record-title { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+    .record-title span { color: var(--muted); font-size: .78rem; }
+    .fields { display: grid; gap: 8px; }
+    .field { display: grid; grid-template-columns: minmax(90px, .7fr) 1.3fr; gap: 12px; padding: 8px 10px; border-radius: 8px; background: #f4f4ef; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
+    .field em { color: var(--muted); font-style: normal; }
+    .field.kept { background: var(--green-soft); }
+    .field.lost { position: relative; background: #f4e8e5; color: var(--red); opacity: .84; }
+    .field.lost::after { content: "破棄"; justify-self: end; border-radius: 999px; padding: 0 7px; background: var(--red); color: white; font: 700 .63rem/1.7 system-ui; }
+    .arrow { color: var(--orange); font-size: 2.2rem; }
+
+    .cost-compare { display: grid; grid-template-columns: .8fr 1.2fr; gap: 22px; }
+    .route-picker { padding: 22px; }
+    .route-picker button { width: 100%; margin-top: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: white; color: var(--ink); text-align: left; cursor: pointer; }
+    .route-picker button[aria-pressed="true"] { border-color: var(--green); background: var(--green-soft); box-shadow: inset 4px 0 var(--green); }
+    .route-picker small { display: block; margin-top: 3px; color: var(--muted); }
+    .calculator { display: flex; min-height: 300px; flex-direction: column; justify-content: space-between; padding: 28px; background: var(--code); color: #f7faf8; }
+    .calc-label { color: #9fb4aa; font-size: .74rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .formula { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 24px 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .formula .piece { padding: 10px 12px; border-radius: 9px; background: rgba(255,255,255,.08); }
+    .formula .lexical { color: #9ee5ca; }
+    .formula .transition { color: #a9d5ff; }
+    .formula .operator { color: #74877e; }
+    .total { display: flex; justify-content: space-between; align-items: end; border-top: 1px solid rgba(255,255,255,.14); padding-top: 18px; }
+    .total span { color: #9fb4aa; }
+    .total strong { font: 500 2.7rem/1 Georgia, serif; color: #f7c6a6; }
+    .verdict { margin-top: 22px; color: var(--muted); }
+
+    .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    .model { overflow: hidden; }
+    .model header { padding: 22px 24px; border-bottom: 1px solid var(--line); }
+    .model header p { margin: 4px 0 0; color: var(--muted); font-size: .85rem; }
+    .model-body { padding: 24px; }
+    .equation { overflow-x: auto; padding: 16px; border-radius: 12px; background: #f3f4ef; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; white-space: nowrap; }
+    .scale { display: grid; gap: 12px; margin-top: 20px; }
+    .scale-row { display: grid; grid-template-columns: 132px 1fr 52px; gap: 12px; align-items: center; font-size: .76rem; }
+    .bar { height: 9px; overflow: hidden; border-radius: 999px; background: #eceee9; }
+    .bar span { display: block; height: 100%; border-radius: inherit; }
+    .mecab .bar span { width: 84%; background: var(--green); }
+    .beme .bar span { width: 9%; background: var(--orange); }
+
+    .dp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    .state-card { padding: 26px; }
+    .state-chip { display: inline-flex; gap: 8px; margin: 8px 0 20px; padding: 9px 12px; border-radius: 10px; background: var(--blue-soft); color: var(--blue); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+    pre { overflow-x: auto; margin: 0; padding: 20px; border-radius: 14px; background: var(--code); color: #dff1e9; font: .81rem/1.75 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .comment { color: #82978d; }
+    .hl-green { color: #9ee5ca; }
+    .hl-blue { color: #a9d5ff; }
+
+    .formal-grid { display: grid; grid-template-columns: .9fr 1.1fr; gap: 22px; }
+    .definition-card { padding: 26px; }
+    .math-block {
+      overflow-x: auto;
+      margin: 16px 0;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #f4f5f0;
+      font: 500 clamp(1rem, 2.3vw, 1.35rem)/1.8 Georgia, "Times New Roman", serif;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .math-block var { color: var(--green); font-weight: 700; }
+    .math-block .pair { color: var(--blue); }
+    .symbol-list { display: grid; gap: 8px; margin: 18px 0 0; }
+    .symbol-row { display: grid; grid-template-columns: 100px 1fr; gap: 14px; padding: 10px 12px; border-radius: 9px; background: #f5f5f1; font-size: .84rem; }
+    .symbol-row code { color: var(--green); font-weight: 800; }
+    .formal-path { padding: 26px; background: var(--code); color: white; }
+    .formal-path h3 { color: white; }
+    .formal-path p { color: #b9c8c0; }
+    .formal-path .math-block { border-color: rgba(255,255,255,.12); background: rgba(255,255,255,.07); color: white; }
+    .formal-path .math-block var { color: #9ee5ca; }
+    .formal-path .math-block .pair { color: #a9d5ff; }
+    .transform { margin-top: 22px; padding: 26px; }
+    .transform-flow { display: grid; grid-template-columns: 1fr auto 1fr; gap: 22px; align-items: stretch; margin-top: 22px; }
+    .mini-graph { display: grid; place-content: center; min-height: 210px; padding: 20px; border-radius: 14px; background: #f4f5f0; }
+    .mini-title { margin-bottom: 18px; color: var(--muted); font-size: .74rem; font-weight: 800; letter-spacing: .1em; text-align: center; text-transform: uppercase; }
+    .mini-row { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 10px 0; white-space: nowrap; }
+    .mini-node { display: inline-grid; min-width: 34px; height: 34px; padding-inline: 8px; place-items: center; border-radius: 50%; background: var(--ink); color: white; font-size: .74rem; font-weight: 800; }
+    .mini-word { display: inline-grid; min-width: 82px; min-height: 42px; padding: 6px 10px; place-items: center; border: 2px solid var(--green); border-radius: 10px; background: white; color: var(--ink); font-size: .78rem; font-weight: 800; }
+    .mini-word.alt { border-color: var(--orange); }
+    .mini-edge { color: #809087; font-weight: 800; }
+    .transform-arrow { display: grid; place-items: center; color: var(--orange); font-size: 2.5rem; }
+    .state-result { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 20px; }
+    .state-result div { padding: 16px; border-radius: 12px; background: var(--blue-soft); }
+    .state-result code { display: block; margin-bottom: 4px; color: var(--blue); font-weight: 800; }
+
+    .summary { padding: clamp(28px, 5vw, 48px); border-color: rgba(23,107,84,.3); background: var(--green-soft); }
+    .summary h2 { max-width: 850px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 30px; }
+    .summary-item { padding: 20px; border-radius: 14px; background: rgba(255,255,255,.7); }
+    .summary-item strong { display: block; margin-bottom: 6px; color: var(--green); }
+    .summary-item p { margin: 0; color: var(--muted); font-size: .9rem; }
+    footer { padding: 30px 0 48px; border-top: 1px solid var(--line); color: var(--muted); font-size: .78rem; }
+
+    @media (max-width: 800px) {
+      .hero { padding-top: 58px; }
+      .section-head { grid-template-columns: 1fr; gap: 8px; }
+      .pipeline, .cost-compare, .comparison, .dp-grid { grid-template-columns: 1fr; }
+      .formal-grid, .transform-flow { grid-template-columns: 1fr; }
+      .transform-arrow { transform: rotate(90deg); }
+      .pipeline .arrow { transform: rotate(90deg); justify-self: center; line-height: 1; }
+      .summary-grid { grid-template-columns: 1fr; }
+      .mapping-note { grid-template-columns: 1fr; }
+      .switch-row { align-items: flex-start; flex-direction: column; }
+    }
+    @media (max-width: 520px) {
+      .page { width: min(100% - 22px, 1120px); }
+      .hero { padding-top: 44px; }
+      .thesis { grid-template-columns: 1fr; }
+      .term-switcher { padding: 16px 8px; }
+      .switch-row { padding-inline: 8px; }
+      .card { border-radius: 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <header class="hero page">
+    <p class="eyebrow">BeME architecture note</p>
+    <h1>ラティスは、<br>「位置」と「単語」の地図。</h1>
+    <p class="hero-copy">BeMEがIPADICから何を残し、何を捨てたのか。まずグラフの形を正しく持ってから、<strong>単語生起コスト</strong>と<strong>接続コスト</strong>がDPでどう足されるかを追います。</p>
+    <div class="thesis">
+      <span class="number">01</span>
+      <p><strong>最初の要点：</strong> BeMEコードでは入力中の位置がnode、辞書から見つかった単語候補がedgeです。ただしMeCabの文献では、単語候補そのものをnodeと呼ぶことがあります。</p>
+    </div>
+  </header>
+
+  <div class="toc-wrap">
+    <nav class="toc page" aria-label="記事内ナビゲーション">
+      <a href="#graph">01 グラフの形</a>
+      <a href="#import">02 IPADICの取り込み</a>
+      <a href="#cost">03 コストを足す</a>
+      <a href="#difference">04 MeCabとの差</a>
+      <a href="#dp">05 DPの状態</a>
+      <a href="#formal">06 グラフ理論で定義</a>
+    </nav>
+  </div>
+
+  <main class="page">
+    <section id="graph">
+      <div class="section-head">
+        <span class="section-no">01 / GRAPH</span>
+        <div><h2>同じラティスには、2つの描き方がある</h2><p class="section-lead">まず「単語候補をノードにした図」を見てください。分岐し、別々の経路を通り、最後に合流するDAGとして見えます。</p></div>
+      </div>
+
+      <div class="card term-switcher">
+        <div class="switch-row">
+          <p id="term-description">単語候補をノードとして描いた、一般的な形態素ラティスの見方です。</p>
+          <div class="segmented" role="group" aria-label="用語体系">
+            <button type="button" data-term="mecab" aria-pressed="true">単語ノード図</button>
+            <button type="button" data-term="beme" aria-pressed="false">BeME内部図</button>
+          </div>
+        </div>
+        <div class="view-panel" data-view="mecab">
+          <div class="word-graph-stage" aria-label="単語候補をノードにした、うけてのラティス図">
+            <div class="word-graph">
+              <div class="connector primary c-bos-uke"></div>
+              <div class="connector alt c-bos-ukete"></div>
+              <div class="connector c-bos-u"></div>
+              <div class="connector primary c-uke-te"></div>
+              <div class="connector primary c-te-eos"></div>
+              <div class="connector alt c-ukete-eos"></div>
+              <div class="connector c-u-ke"></div>
+              <div class="connector c-ke-te"></div>
+              <div class="connector c-te2-eos"></div>
+              <span class="edge-label label-uke-te">接続 0.05</span>
+              <span class="edge-label label-ukete">境界なし</span>
+              <div class="graph-node terminal n-bos"><strong>BOS</strong><small>開始</small></div>
+              <div class="graph-node n-uke"><strong>受け</strong><small>[0,2] verb · 3.968</small></div>
+              <div class="graph-node alt n-ukete"><strong>受け手</strong><small>[0,3] noun · 3.085</small></div>
+              <div class="graph-node fallback n-u"><strong>う</strong><small>[0,1] 候補</small></div>
+              <div class="graph-node n-te"><strong>て</strong><small>[2,3] particle · 2.835</small></div>
+              <div class="graph-node fallback n-ke"><strong>け</strong><small>[1,2] 候補</small></div>
+              <div class="graph-node fallback n-te-fallback"><strong>て</strong><small>[2,3] 候補</small></div>
+              <div class="graph-node terminal n-eos"><strong>EOS</strong><small>終了</small></div>
+            </div>
+          </div>
+          <div class="graph-caption"><span><i></i>箱＝単語候補</span><span><i class="line"></i>矢印＝前後に接続可能</span></div>
+        </div>
+        <div class="view-panel" data-view="beme" hidden>
+          <div class="lattice-stage" aria-label="BeME内部表現による、うけてのラティス図">
+            <div class="lattice">
+              <div class="position"><span class="dot">0</span><span class="pos-label">入力位置node</span></div>
+              <div class="position"><span class="dot">1</span><span class="pos-label">入力位置node</span></div>
+              <div class="position"><span class="dot">2</span><span class="pos-label">入力位置node</span></div>
+              <div class="position"><span class="dot">3</span><span class="pos-label">入力位置node</span></div>
+              <span class="char c1">う</span><span class="char c2">け</span><span class="char c3">て</span>
+              <div class="token-edge e-uke"><div class="token-card"><strong>受け</strong><small>edge · verb · 3.968</small></div></div>
+              <div class="token-edge e-te"><div class="token-card"><strong>て</strong><small>edge · particle · 2.835</small></div></div>
+              <div class="token-edge e-ukete"><div class="token-card"><strong>受け手</strong><small>edge · noun · 3.085</small></div></div>
+              <span class="boundary">edge間の接続コスト</span>
+            </div>
+          </div>
+          <div class="mapping-note">
+            <div><code>受け [0,2]</code>位置0→2のedge</div>
+            <div><code>て [2,3]</code>位置2→3のedge</div>
+            <div><code>受け手 [0,3]</code>位置0→3のedge</div>
+          </div>
+        </div>
+      </div>
+      <div class="callout">
+        <p><strong>数直線に見えたのは、間違いではなく「区間グラフとしての実装図」だったからです。</strong></p>
+        <p>上の2つは同じラティスです。単語ノード図の「受け」という箱を、BeME内部図では位置0→2を結ぶedgeとして表現します。グラフのnodeとedgeを入れ替えたような対応です。</p>
+      </div>
+    </section>
+
+    <section id="import">
+      <div class="section-head">
+        <span class="section-no">02 / IMPORT</span>
+        <div><h2>IPADICの1行から、2つのIDが消える</h2><p class="section-lead">「接続コストを捨てた」とは、行列ファイルを使わないだけでなく、行列を引く鍵も保存しなかったということです。</p></div>
+      </div>
+      <div class="pipeline">
+        <article class="card record">
+          <div class="record-title"><strong>IPADIC CSV</strong><span>入力</span></div>
+          <div class="fields">
+            <div class="field kept"><em>surface</em><b>受け</b></div>
+            <div class="field lost"><em>left_id</em><b>…</b></div>
+            <div class="field lost"><em>right_id</em><b>…</b></div>
+            <div class="field kept"><em>raw cost</em><b>7436</b></div>
+            <div class="field kept"><em>詳細品詞</em><b>動詞・自立・五段…</b></div>
+            <div class="field kept"><em>reading</em><b>ウケ</b></div>
+          </div>
+        </article>
+        <div class="arrow" aria-hidden="true">→</div>
+        <article class="card record">
+          <div class="record-title"><strong>BeME TSV</strong><span>出力</span></div>
+          <div class="fields">
+            <div class="field kept"><em>reading</em><b>うけ</b></div>
+            <div class="field kept"><em>surface</em><b>受け</b></div>
+            <div class="field kept"><em>pos</em><b>verb</b></div>
+            <div class="field kept"><em>cost</em><b>3.968</b></div>
+          </div>
+        </article>
+      </div>
+      <div class="callout">
+        <p><strong>詳細POSも圧縮されます。</strong> 「動詞・自立・五段・連用形」のような違いは、BeMEではまとめて <code>verb</code> です。そのため1316種類の接続状態を、後段で復元することはできません。</p>
+      </div>
+    </section>
+
+    <section id="cost">
+      <div class="section-head">
+        <span class="section-no">03 / COST</span>
+        <div><h2>DPが比較するのは、経路の総額</h2><p class="section-lead">下の2経路を切り替えると、単語コストと境界コストの足され方が見えます。小さい方が勝ちです。</p></div>
+      </div>
+      <div class="cost-compare">
+        <div class="card route-picker" role="group" aria-label="比較する経路">
+          <h3>経路を選ぶ</h3>
+          <button type="button" data-route="split" aria-pressed="true"><strong>受け ＋ て</strong><small>2単語・境界が1つ</small></button>
+          <button type="button" data-route="single" aria-pressed="false"><strong>受け手</strong><small>1単語・境界なし</small></button>
+          <p class="verdict">この設定では <strong>受け手</strong> の方が3.768低いため、1-bestになります。</p>
+        </div>
+        <div class="card calculator" aria-live="polite">
+          <div>
+            <div class="calc-label">Path cost</div>
+            <div class="formula" id="formula"></div>
+          </div>
+          <div class="total"><span>合計</span><strong id="total">6.853</strong></div>
+        </div>
+      </div>
+      <div class="callout">
+        <p>一般式は <code>これまでのcost + 今の単語cost + transition(直前POS, 今のPOS)</code>。文頭だけは直前POSがないので、接続コストは0です。</p>
+      </div>
+    </section>
+
+    <section id="difference">
+      <div class="section-head">
+        <span class="section-no">04 / MODEL</span>
+        <div><h2>置き換えたのは、境界の採点方法</h2><p class="section-lead">単語コストはIPADIC由来です。しかし単語どうしの相性は、別のものへ差し替わっています。</p></div>
+      </div>
+      <div class="comparison">
+        <article class="card model mecab">
+          <header><h3>MeCab / IPADIC</h3><p>細かな接続状態を行列で参照</p></header>
+          <div class="model-body">
+            <div class="equation">matrix[前.right_id][今.left_id]</div>
+            <p>1316 × 1316。自然な接続には大きな負の値＝報酬も入ります。</p>
+            <div class="scale"><div class="scale-row"><span>値の広がり</span><div class="bar"><span></span></div><b>大</b></div></div>
+          </div>
+        </article>
+        <article class="card model beme">
+          <header><h3>BeME Phase 1</h3><p>粗いPOSペアを手書き表で参照</p></header>
+          <div class="model-body">
+            <div class="equation">table[前.pos][今.pos]</div>
+            <p>概念上は約16 × 16。実装は少数の定義と、0.08 / 0.12の既定値です。</p>
+            <div class="scale"><div class="scale-row"><span>値の広がり</span><div class="bar"><span></span></div><b>小</b></div></div>
+          </div>
+        </article>
+      </div>
+      <div class="callout">
+        <p><strong>「matrix.defを16×16に集約した」のではありません。</strong> matrix.defを参照せず、粗いPOSラベル向けの小さな正の値を独立に手で決めています。したがって自然な接続を強く推す負の報酬が失われました。</p>
+      </div>
+    </section>
+
+    <section id="dp">
+      <div class="section-head">
+        <span class="section-no">05 / DP STATE</span>
+        <div><h2>なぜ状態に「直前POS」が要るのか</h2><p class="section-lead">未来のコストは現在位置だけでは決まりません。次の単語へ接続するとき、直前の単語が何だったかを覚えておく必要があります。</p></div>
+      </div>
+      <div class="dp-grid">
+        <article class="card state-card">
+          <h3>DPの状態</h3>
+          <div class="state-chip">state = (position, previous_pos)</div>
+          <p>同じ位置2に到達していても、直前が <code>verb</code> の経路と <code>noun</code> の経路では、次の候補への接続コストが違います。</p>
+          <p>本来のIPADICを再現するなら、ここで必要なのは粗いPOSではなく、直前単語の <code>right_id</code> です。</p>
+        </article>
+        <pre aria-label="DPのコスト加算コード例"><code><span class="comment"># 経路を単語候補edgeで1本伸ばす</span>
+cost = (
+    path.cost
+    + <span class="hl-green">edge.token.cost</span>
+    + <span class="hl-blue">pos_transition_cost(</span>
+        previous_pos,
+        edge.token.pos,
+      <span class="hl-blue">)</span>
+)
+
+<span class="comment"># 緑: IPADIC由来の生起コスト</span>
+<span class="comment"># 青: 手書きPOS接続コスト</span></code></pre>
+      </div>
+    </section>
+
+    <section id="formal">
+      <div class="section-head">
+        <span class="section-no">06 / FORMAL</span>
+        <div><h2>グラフ理論の言葉だけで定義する</h2><p class="section-lead">BeMEのラティスは、辺に単項コストを持ち、連続する辺のペアに二項コストを持つ、有向多重DAGです。</p></div>
+      </div>
+
+      <div class="formal-grid">
+        <article class="card definition-card">
+          <h3>グラフと候補パス</h3>
+          <div class="math-block"><var>G</var> = (<var>V</var>, <var>E</var>), &nbsp; <var>V</var> = {0, 1, 2, 3}</div>
+          <div class="symbol-list">
+            <div class="symbol-row"><code>e₁=(0,2)</code><span>単語候補「受け」</span></div>
+            <div class="symbol-row"><code>e₂=(2,3)</code><span>単語候補「て」</span></div>
+            <div class="symbol-row"><code>e₃=(0,3)</code><span>単語候補「受け手」</span></div>
+          </div>
+          <div class="math-block"><var>P</var><sub>split</sub> = (e₁, e₂)<br><var>P</var><sub>single</sub> = (e₃)</div>
+          <p>変換とは、始点0から終点3までのパスのうち、総コストが最小のものを選ぶことです。</p>
+        </article>
+
+        <article class="card formal-path">
+          <h3>パスの目的関数</h3>
+          <p>生起コストは1本の辺に対する関数、接続コストは連続する2辺に対する関数です。</p>
+          <div class="math-block"><var>w</var> : E → ℝ<br><span class="pair">c</span> : E × E → ℝ</div>
+          <div class="math-block">
+            <var>C</var>(P) =
+            <span>∑<sub>i=1</sub><sup>k</sup> <var>w</var>(e<sub>i</sub>)</span>
+            +
+            <span>∑<sub>i=1</sub><sup>k−1</sup> <span class="pair">c</span>(e<sub>i</sub>, e<sub>i+1</sub>)</span>
+          </div>
+          <div class="math-block">
+            <var>C</var>(P<sub>split</sub>) = 3.968 + <span class="pair">0.050</span> + 2.835 = 6.853<br>
+            <var>C</var>(P<sub>single</sub>) = 3.085
+          </div>
+        </article>
+      </div>
+
+      <article class="card transform">
+        <h3>通常の最短経路問題へ変換する</h3>
+        <p>元グラフでは接続コストが「辺のペア」に依存します。元の各辺を新しい頂点にする状態展開を行えば、通常の重み付きグラフとして扱えます。</p>
+        <div class="transform-flow">
+          <div class="mini-graph">
+            <div class="mini-title">元の位置グラフ</div>
+            <div class="mini-row"><span class="mini-node">0</span><span class="mini-edge">─ 受け →</span><span class="mini-node">2</span><span class="mini-edge">─ て →</span><span class="mini-node">3</span></div>
+            <div class="mini-row"><span class="mini-node">0</span><span class="mini-edge">── 受け手 ──→</span><span class="mini-node">3</span></div>
+          </div>
+          <div class="transform-arrow" aria-hidden="true">→</div>
+          <div class="mini-graph">
+            <div class="mini-title">辺を頂点にした状態展開グラフ</div>
+            <div class="mini-row"><span class="mini-node">S</span><span class="mini-edge">→</span><span class="mini-word">受け</span><span class="mini-edge">→</span><span class="mini-word">て</span><span class="mini-edge">→</span><span class="mini-node">T</span></div>
+            <div class="mini-row"><span class="mini-node">S</span><span class="mini-edge">→</span><span class="mini-word alt">受け手</span><span class="mini-edge">→</span><span class="mini-node">T</span></div>
+          </div>
+        </div>
+        <div class="state-result">
+          <div><code>w(e)</code>元グラフの各辺に載る単語生起コスト</div>
+          <div><code>c(e,f)</code>状態展開後の頂点e→fを結ぶ弧に載る接続コスト</div>
+        </div>
+      </article>
+
+      <div class="callout">
+        <p><strong>結論：</strong> 生起コストは <code>edge weight</code>、接続コストは <code>edge-transition cost</code> です。後者があるため、DP状態は位置だけでなく直前の辺に関する情報も必要です。BeMEでは接続コストがPOSだけに依存するので、直前辺を <code>previous_pos</code> へ圧縮しています。</p>
+      </div>
+    </section>
+
+    <section class="card summary">
+      <p class="eyebrow">One sentence summary</p>
+      <h2>単語候補edgeの値は残した。edgeから次のedgeへ移る採点器を、粗い手作り版に置き換えた。</h2>
+      <div class="summary-grid">
+        <div class="summary-item"><strong>残した</strong><p>表層、読み、粗いPOS、変換済みの単語生起コスト</p></div>
+        <div class="summary-item"><strong>捨てた</strong><p>left_id、right_id、matrix.defが持つ詳細な接続信号</p></div>
+        <div class="summary-item"><strong>代わりに使う</strong><p>直前POSと現在POSから引く、小さな手書き固定コスト</p></div>
+      </div>
+    </section>
+  </main>
+
+  <footer><div class="page">対象理解：docs/deepdive-2026-08-21.md（対象コミット 24a422b）。現在のBeMEには後続改善が入っていますが、ここで説明するコスト構造の核は同じです。</div></footer>
+
+  <script>
+    const termButtons = document.querySelectorAll('[data-term]');
+    const termDescription = document.querySelector('#term-description');
+    const viewPanels = document.querySelectorAll('[data-view]');
+
+    termButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const isBeme = button.dataset.term === 'beme';
+        termButtons.forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+        viewPanels.forEach((panel) => panel.hidden = panel.dataset.view !== button.dataset.term);
+        termDescription.textContent = isBeme
+          ? 'BeMEコードでは入力位置がnode、単語候補が区間を結ぶedgeです。'
+          : '単語候補をノードとして描いた、一般的な形態素ラティスの見方です。';
+      });
+    });
+
+    const routes = {
+      split: {
+        total: '6.853',
+        pieces: [
+          ['3.968', 'lexical', '受けの生起'],
+          ['+', 'operator', '加算'],
+          ['0.050', 'transition', 'verb → particle'],
+          ['+', 'operator', '加算'],
+          ['2.835', 'lexical', 'ての生起']
+        ]
+      },
+      single: {
+        total: '3.085',
+        pieces: [['3.085', 'lexical', '受け手の生起']]
+      }
+    };
+    const formula = document.querySelector('#formula');
+    const total = document.querySelector('#total');
+    const routeButtons = document.querySelectorAll('[data-route]');
+
+    function renderRoute(routeName) {
+      const route = routes[routeName];
+      formula.replaceChildren(...route.pieces.map(([value, kind, label]) => {
+        const span = document.createElement('span');
+        span.className = kind === 'operator' ? 'operator' : `piece ${kind}`;
+        span.textContent = value;
+        if (kind !== 'operator') span.title = label;
+        return span;
+      }));
+      total.textContent = route.total;
+      routeButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.route === routeName)));
+    }
+    routeButtons.forEach((button) => button.addEventListener('click', () => renderRoute(button.dataset.route)));
+    renderRoute('split');
+  </script>
+</body>
+</html>

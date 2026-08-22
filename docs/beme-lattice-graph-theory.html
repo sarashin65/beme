@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="BeMEのラティス、生起コスト、接続コストをグラフ理論の言葉で説明する技術ノート。">
+  <title>BeMEのラティスをグラフ理論で理解する</title>
+  <style>
+    :root {
+      --text: #24292f;
+      --muted: #59636e;
+      --border: #d0d7de;
+      --soft: #f6f8fa;
+      --link: #0969da;
+      --code-bg: #1f2328;
+      --code-text: #f0f3f6;
+      --note: #fff8c5;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: #fff;
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+      font-size: 17px;
+      line-height: 1.85;
+    }
+    article { width: min(100% - 40px, 820px); margin: 0 auto; padding: 64px 0 100px; }
+    header { padding-bottom: 32px; border-bottom: 1px solid var(--border); }
+    h1 { margin: 0 0 16px; font-size: clamp(2rem, 5vw, 3rem); line-height: 1.25; letter-spacing: -.025em; }
+    .lead { margin: 0; color: var(--muted); font-size: 1.08rem; }
+    nav { margin: 32px 0 56px; padding: 20px 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); }
+    nav strong { display: block; margin-bottom: 8px; }
+    nav ol { margin: 0; padding-left: 1.5rem; }
+    nav a { color: var(--link); text-decoration: none; }
+    nav a:hover { text-decoration: underline; }
+    section { margin-top: 64px; scroll-margin-top: 24px; }
+    h2 { margin: 0 0 24px; padding-bottom: 10px; border-bottom: 1px solid var(--border); font-size: 1.65rem; line-height: 1.35; }
+    h3 { margin: 36px 0 12px; font-size: 1.15rem; }
+    p { margin: 0 0 20px; }
+    code { padding: .15em .35em; border-radius: 4px; background: var(--soft); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
+    pre { overflow-x: auto; margin: 20px 0 28px; padding: 18px 20px; border-radius: 8px; background: var(--code-bg); color: var(--code-text); font: .9rem/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    pre code { padding: 0; background: transparent; color: inherit; font: inherit; }
+    .math {
+      overflow-x: auto;
+      margin: 24px 0;
+      padding: 16px 20px;
+      border-left: 4px solid #6e7781;
+      background: var(--soft);
+      font-size: 1.18rem;
+      text-align: center;
+    }
+    math { font-size: 1.12em; }
+    .note { margin: 28px 0; padding: 16px 20px; border-left: 4px solid #d4a72c; background: var(--note); }
+    .summary { margin-top: 64px; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--soft); }
+    .summary pre { margin-bottom: 0; }
+    @media (max-width: 600px) {
+      body { font-size: 16px; }
+      article { width: min(100% - 28px, 820px); padding-top: 36px; }
+      section { margin-top: 48px; }
+    }
+  </style>
+</head>
+<body>
+<article>
+  <header>
+    <h1>BeMEのラティスをグラフ理論で理解する</h1>
+    <p class="lead">入力位置、単語候補、生起コスト、接続コストを、グラフ理論の用語だけで整理する。</p>
+  </header>
+
+  <nav aria-label="目次">
+    <strong>目次</strong>
+    <ol>
+      <li><a href="#definition">グラフの定義</a></li>
+      <li><a href="#word-cost">生起コストは辺の重み</a></li>
+      <li><a href="#connection-cost">接続コストは「辺のペア」のコスト</a></li>
+      <li><a href="#shortest-path">普通の最短経路問題と何が違うのか</a></li>
+      <li><a href="#line-graph">普通の重み付きグラフに変換する方法</a></li>
+      <li><a href="#dp-state">BeMEのDP状態</a></li>
+      <li><a href="#state-compression">なぜ previousEdge を previousPOS に圧縮できるのか</a></li>
+    </ol>
+  </nav>
+
+  <section id="definition">
+    <h2>1. グラフの定義</h2>
+    <p>グラフ理論として厳密に言うと、BeMEのラティスは単純な「重み付き有向グラフ」ではなく、<strong>連続する2本の辺にもコストを持つ有向多重DAG</strong>です。</p>
+
+    <p>入力が「うけて」で、文字位置が <code>0, 1, 2, 3</code> なら、</p>
+    <div class="math">
+      <math display="block"><mi>V</mi><mo>=</mo><mo>{</mo><mn>0</mn><mo>,</mo><mn>1</mn><mo>,</mo><mn>2</mn><mo>,</mo><mn>3</mn><mo>}</mo></math>
+    </div>
+    <p>が頂点集合です。</p>
+
+    <p>単語候補を辺として、</p>
+    <div class="math">
+      <math display="block"><mi>E</mi><mo>⊆</mo><mi>V</mi><mo>×</mo><mi>V</mi></math>
+    </div>
+    <p>を作ります。</p>
+
+    <p>具体的には、</p>
+    <pre><code>e₁ = (0, 2, 受け)
+e₂ = (2, 3, て)
+e₃ = (0, 3, 受け手)</code></pre>
+
+    <p>です。同じ始点・終点を持つ別表記候補も存在できるので、正確には有向多重グラフです。</p>
+    <pre><code>0 ── e₁:受け ──&gt; 2 ── e₂:て ──&gt; 3
+│
+└──────── e₃:受け手 ─────────&gt; 3</code></pre>
+
+    <p>変換とは、頂点 <code>0</code> から頂点 <code>3</code> までのパスを一つ選ぶことです。</p>
+    <p>候補パスは、</p>
+    <div class="math">
+      <math display="block"><msub><mi>P</mi><mn>1</mn></msub><mo>=</mo><mo>(</mo><msub><mi>e</mi><mn>1</mn></msub><mo>,</mo><msub><mi>e</mi><mn>2</mn></msub><mo>)</mo></math>
+    </div>
+    <p>と、</p>
+    <div class="math">
+      <math display="block"><msub><mi>P</mi><mn>2</mn></msub><mo>=</mo><mo>(</mo><msub><mi>e</mi><mn>3</mn></msub><mo>)</mo></math>
+    </div>
+    <p>です。</p>
+  </section>
+
+  <section id="word-cost">
+    <h2>2. 生起コストは辺の重み</h2>
+    <p>各単語候補辺 <math><mi>e</mi></math> に、単項コスト <math><mi>w</mi><mo>(</mo><mi>e</mi><mo>)</mo></math> があります。</p>
+    <div class="math">
+      <math display="block"><mi>w</mi><mo>:</mo><mi>E</mi><mo>→</mo><mi>ℝ</mi></math>
+    </div>
+    <p>これが生起コストです。</p>
+
+    <pre><code>w(e₁) = w(受け)   = 3.968
+w(e₂) = w(て)     = 2.835
+w(e₃) = w(受け手) = 3.085</code></pre>
+
+    <p>ここまでは普通の重み付きグラフです。</p>
+  </section>
+
+  <section id="connection-cost">
+    <h2>3. 接続コストは「辺のペア」のコスト</h2>
+    <p>接続コストは頂点の重みでも、単独の辺の重みでもありません。</p>
+    <p>連続可能な2辺、</p>
+    <div class="math">
+      <math display="block">
+        <mi>e</mi><mo>=</mo><mo>(</mo><mi>i</mi><mo>,</mo><mi>j</mi><mo>)</mo><mo>,</mo>
+        <mspace width="1em"></mspace>
+        <mi>f</mi><mo>=</mo><mo>(</mo><mi>j</mi><mo>,</mo><mi>k</mi><mo>)</mo>
+      </math>
+    </div>
+    <p>に対する二項コストです。</p>
+    <div class="math">
+      <math display="block"><mi>c</mi><mo>:</mo><mi>E</mi><mo>×</mo><mi>E</mi><mo>→</mo><mi>ℝ</mi></math>
+    </div>
+    <p>ただし、</p>
+    <div class="math">
+      <math display="block"><mi>head</mi><mo>(</mo><mi>e</mi><mo>)</mo><mo>=</mo><mi>tail</mi><mo>(</mo><mi>f</mi><mo>)</mo></math>
+    </div>
+    <p>を満たす場合だけ定義されます。</p>
+
+    <p>今回なら、</p>
+    <div class="math">
+      <math display="block">
+        <mi>c</mi><mo>(</mo><msub><mi>e</mi><mn>1</mn></msub><mo>,</mo><msub><mi>e</mi><mn>2</mn></msub><mo>)</mo>
+        <mo>=</mo><mi>c</mi><mo>(</mo><mtext>受け</mtext><mo>,</mo><mtext>て</mtext><mo>)</mo>
+        <mo>=</mo><mn>0.05</mn>
+      </math>
+    </div>
+
+    <p>です。したがって、パス</p>
+    <div class="math">
+      <math display="block"><mi>P</mi><mo>=</mo><mo>(</mo><msub><mi>e</mi><mn>1</mn></msub><mo>,</mo><msub><mi>e</mi><mn>2</mn></msub><mo>,</mo><mo>…</mo><mo>,</mo><msub><mi>e</mi><mi>k</mi></msub><mo>)</mo></math>
+    </div>
+    <p>の総コストは、</p>
+    <div class="math">
+      <math display="block">
+        <mi>C</mi><mo>(</mo><mi>P</mi><mo>)</mo><mo>=</mo>
+        <munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>k</mi></munderover>
+        <mi>w</mi><mo>(</mo><msub><mi>e</mi><mi>i</mi></msub><mo>)</mo>
+        <mo>+</mo>
+        <munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mrow><mi>k</mi><mo>−</mo><mn>1</mn></mrow></munderover>
+        <mi>c</mi><mo>(</mo><msub><mi>e</mi><mi>i</mi></msub><mo>,</mo><msub><mi>e</mi><mrow><mi>i</mi><mo>+</mo><mn>1</mn></mrow></msub><mo>)</mo>
+      </math>
+    </div>
+    <p>になります。</p>
+
+    <p>「受け＋て」なら、</p>
+    <div class="math">
+      <math display="block">
+        <mi>C</mi><mo>(</mo><msub><mi>P</mi><mn>1</mn></msub><mo>)</mo><mo>=</mo>
+        <mi>w</mi><mo>(</mo><msub><mi>e</mi><mn>1</mn></msub><mo>)</mo><mo>+</mo>
+        <mi>c</mi><mo>(</mo><msub><mi>e</mi><mn>1</mn></msub><mo>,</mo><msub><mi>e</mi><mn>2</mn></msub><mo>)</mo><mo>+</mo>
+        <mi>w</mi><mo>(</mo><msub><mi>e</mi><mn>2</mn></msub><mo>)</mo>
+      </math>
+    </div>
+    <div class="math">
+      <math display="block"><mo>=</mo><mn>3.968</mn><mo>+</mo><mn>0.05</mn><mo>+</mo><mn>2.835</mn><mo>=</mo><mn>6.853</mn></math>
+    </div>
+
+    <p>「受け手」なら辺が1本なので、辺ペアがありません。</p>
+    <div class="math">
+      <math display="block"><mi>C</mi><mo>(</mo><msub><mi>P</mi><mn>2</mn></msub><mo>)</mo><mo>=</mo><mi>w</mi><mo>(</mo><msub><mi>e</mi><mn>3</mn></msub><mo>)</mo><mo>=</mo><mn>3.085</mn></math>
+    </div>
+
+    <p>したがって、</p>
+    <div class="math">
+      <math display="block"><mi>C</mi><mo>(</mo><msub><mi>P</mi><mn>2</mn></msub><mo>)</mo><mo>&lt;</mo><mi>C</mi><mo>(</mo><msub><mi>P</mi><mn>1</mn></msub><mo>)</mo></math>
+    </div>
+    <p>なので「受け手」が選ばれます。</p>
+  </section>
+
+  <section id="shortest-path">
+    <h2>4. 普通の最短経路問題と何が違うのか</h2>
+    <p>普通の最短経路問題は、</p>
+    <div class="math">
+      <math display="block"><mi>C</mi><mo>(</mo><mi>P</mi><mo>)</mo><mo>=</mo><munder><mo>∑</mo><mrow><mi>e</mi><mo>∈</mo><mi>P</mi></mrow></munder><mi>w</mi><mo>(</mo><mi>e</mi><mo>)</mo></math>
+    </div>
+    <p>のように、各辺の重みを足すだけです。</p>
+
+    <p>しかしBeMEは、</p>
+    <div class="math">
+      <math display="block">
+        <mi>C</mi><mo>(</mo><mi>P</mi><mo>)</mo><mo>=</mo>
+        <mo>∑</mo><mi>w</mi><mo>(</mo><msub><mi>e</mi><mi>i</mi></msub><mo>)</mo>
+        <mo>+</mo>
+        <mo>∑</mo><mi>c</mi><mo>(</mo><msub><mi>e</mi><mi>i</mi></msub><mo>,</mo><msub><mi>e</mi><mrow><mi>i</mi><mo>+</mo><mn>1</mn></mrow></msub><mo>)</mo>
+      </math>
+    </div>
+    <p>なので、次の辺のコストが「直前にどの辺を通ったか」に依存します。</p>
+
+    <p>つまり、元の位置グラフ上では<strong>一次のマルコフ性を持つ辺遷移コスト付き最短経路問題</strong>です。</p>
+    <p>位置 <code>2</code> に到達しただけでは、次のコストを決められません。</p>
+    <pre><code>どの辺を通って位置2に来たか</code></pre>
+    <p>も状態に必要です。</p>
+  </section>
+
+  <section id="line-graph">
+    <h2>5. 普通の重み付きグラフに変換する方法</h2>
+    <p>これを通常の最短経路問題にしたければ、元のグラフの「辺」を新しいグラフの「頂点」にします。</p>
+    <p>これは線グラフに近い状態展開です。</p>
+
+    <h3>元のグラフ</h3>
+    <pre><code>位置0 ──受け──&gt; 位置2 ──て──&gt; 位置3
+位置0 ─────────受け手────────&gt; 位置3</code></pre>
+
+    <h3>状態展開後</h3>
+    <pre><code>START ──&gt; [受け] ──&gt; [て] ──&gt; END
+   │
+   └────&gt; [受け手] ─────────&gt; END</code></pre>
+
+    <p>新しいグラフでは、</p>
+    <ul>
+      <li>頂点 <code>[受け]</code> に生起コスト <code>3.968</code></li>
+      <li>頂点 <code>[て]</code> に生起コスト <code>2.835</code></li>
+      <li>弧 <code>[受け] → [て]</code> に接続コスト <code>0.05</code></li>
+    </ul>
+    <p>を置けます。</p>
+
+    <p>頂点重みを入辺へ移せば、完全に普通の辺重み付き最短経路問題になります。</p>
+    <pre><code>START → [受け]   : 3.968
+[受け] → [て]    : 0.05 + 2.835
+[て] → END       : 0</code></pre>
+    <p>とすれば、総コストは同じです。</p>
+  </section>
+
+  <section id="dp-state">
+    <h2>6. BeMEのDP状態</h2>
+    <p>厳密には直前の辺全体を保持すれば、</p>
+    <div class="math">
+      <math display="block"><mi>DP</mi><mo>[</mo><mi>position</mi><mo>,</mo><mi>previousEdge</mi><mo>]</mo></math>
+    </div>
+    <p>です。</p>
+
+    <p>ただしBeMEの接続コストは、辺のPOSしか見ません。</p>
+    <div class="math">
+      <math display="block">
+        <mi>c</mi><mo>(</mo><mi>e</mi><mo>,</mo><mi>f</mi><mo>)</mo><mo>=</mo>
+        <mi>T</mi><mo>(</mo><mi>pos</mi><mo>(</mo><mi>e</mi><mo>)</mo><mo>,</mo><mi>pos</mi><mo>(</mo><mi>f</mi><mo>)</mo><mo>)</mo>
+      </math>
+    </div>
+    <p>そのため、同じPOSの辺を同一状態へまとめられます。</p>
+    <div class="math">
+      <math display="block"><mi>DP</mi><mo>[</mo><mi>position</mi><mo>,</mo><mi>previousPOS</mi><mo>]</mo></math>
+    </div>
+
+    <p>実装の、</p>
+    <pre><code>remaining[position][previous_pos]</code></pre>
+    <p>はこれです。</p>
+
+    <p>MeCabの本来の接続コストなら、</p>
+    <div class="math">
+      <math display="block">
+        <mi>c</mi><mo>(</mo><mi>e</mi><mo>,</mo><mi>f</mi><mo>)</mo><mo>=</mo>
+        <mi>M</mi><mo>[</mo><mi>rightId</mi><mo>(</mo><mi>e</mi><mo>)</mo><mo>]</mo>
+        <mo>[</mo><mi>leftId</mi><mo>(</mo><mi>f</mi><mo>)</mo><mo>]</mo>
+      </math>
+    </div>
+    <p>なので、DP状態は少なくとも、</p>
+    <div class="math">
+      <math display="block"><mi>DP</mi><mo>[</mo><mi>position</mi><mo>,</mo><mi>previousRightId</mi><mo>]</mo></math>
+    </div>
+    <p>になります。</p>
+  </section>
+
+  <section id="state-compression">
+    <h2>7. なぜ <code>previousEdge</code> を <code>previousPOS</code> に圧縮できるのか</h2>
+    <p>理由は、<code>previousEdge</code> が持つ情報のうち、<strong>未来のコスト計算に使われるのが <code>previousPOS</code> だけだから</strong>です。</p>
+    <p>これはDPにおける「十分な状態」への圧縮です。</p>
+
+    <h3>元の状態</h3>
+    <p>厳密に書くと、位置 <math><mi>p</mi></math> 以降の最小コストは、</p>
+    <div class="math">
+      <math display="block"><mi>F</mi><mo>(</mo><mi>p</mi><mo>,</mo><msub><mi>e</mi><mi>prev</mi></msub><mo>)</mo></math>
+    </div>
+    <p>です。次の単語候補edgeを <math><mi>f</mi></math> とすると、</p>
+    <div class="math">
+      <math display="block">
+        <mi>F</mi><mo>(</mo><mi>p</mi><mo>,</mo><msub><mi>e</mi><mi>prev</mi></msub><mo>)</mo>
+        <mo>=</mo>
+        <munder><mi>min</mi><mi>f</mi></munder>
+        <mo>[</mo>
+        <mi>c</mi><mo>(</mo><msub><mi>e</mi><mi>prev</mi></msub><mo>,</mo><mi>f</mi><mo>)</mo>
+        <mo>+</mo><mi>w</mi><mo>(</mo><mi>f</mi><mo>)</mo>
+        <mo>+</mo><mi>F</mi><mo>(</mo><mi>end</mi><mo>(</mo><mi>f</mi><mo>)</mo><mo>,</mo><mi>f</mi><mo>)</mo>
+        <mo>]</mo>
+      </math>
+    </div>
+    <p>となります。</p>
+    <ul>
+      <li><math><mi>w</mi><mo>(</mo><mi>f</mi><mo>)</mo></math>：次の単語の生起コスト</li>
+      <li><math><mi>c</mi><mo>(</mo><msub><mi>e</mi><mi>prev</mi></msub><mo>,</mo><mi>f</mi><mo>)</mo></math>：直前edgeと次edgeの接続コスト</li>
+    </ul>
+
+    <h3>BeMEの接続コストが見るのはPOSだけ</h3>
+    <p>BeMEでは、接続コストを次のように計算しています。</p>
+    <div class="math">
+      <math display="block">
+        <mi>c</mi><mo>(</mo><mi>e</mi><mo>,</mo><mi>f</mi><mo>)</mo>
+        <mo>=</mo>
+        <mi>T</mi><mo>(</mo><mi>pos</mi><mo>(</mo><mi>e</mi><mo>)</mo><mo>,</mo><mi>pos</mi><mo>(</mo><mi>f</mi><mo>)</mo><mo>)</mo>
+      </math>
+    </div>
+    <p>つまり、直前edgeについて参照するのは、表層、読み、開始位置、生起コストではなく、<code>e.pos</code> だけです。</p>
+
+    <p>例えば、同じ位置に次の2経路で到着したとします。</p>
+    <pre><code>経路A → 「本」 noun → position=5
+経路B → 「人」 noun → position=5</code></pre>
+    <p>直前edgeは「本」と「人」で異なります。しかし、どちらも直前POSは <code>noun</code> です。次のedgeが「を」なら、BeMEが見る接続コストはどちらも、</p>
+    <pre><code>pos_transition_cost("noun", "particle")</code></pre>
+    <p>です。このモデルには「本」と「人」を区別する材料がありません。</p>
+
+    <h3>安い部分経路だけ残せる理由</h3>
+    <p>位置と直前POSが同じ2つの部分経路を考えます。</p>
+    <pre><code>経路A:
+  累積コスト    = 10.0
+  position      = 5
+  previousPOS   = noun
+
+経路B:
+  累積コスト    = 12.0
+  position      = 5
+  previousPOS   = noun</code></pre>
+    <p>今後どの続きを選んでも、追加される未来コストは両者で同じです。未来コストが <code>7.0</code> なら、</p>
+    <pre><code>経路Aの最終コスト = 10.0 + 7.0 = 17.0
+経路Bの最終コスト = 12.0 + 7.0 = 19.0</code></pre>
+    <p>別の続きを選び、未来コストが <code>9.0</code> になっても、</p>
+    <pre><code>経路Aの最終コスト = 10.0 + 9.0 = 19.0
+経路Bの最終コスト = 12.0 + 9.0 = 21.0</code></pre>
+    <p>です。経路Bが後から逆転することはありません。</p>
+    <div class="note"><strong>Bellmanの最適性原理：</strong> 同じ状態に到着した部分経路のうち、コストが高い方は、その後どの共通の続きを選んでも最適解になれません。</div>
+
+    <h3>圧縮後のDP漸化式</h3>
+    <p>状態を、</p>
+    <div class="math">
+      <math display="block"><mi>DP</mi><mo>[</mo><mi>p</mi><mo>,</mo><mi>q</mi><mo>]</mo></math>
+    </div>
+    <p>とします。</p>
+    <ul>
+      <li><math><mi>p</mi></math>：現在の入力位置</li>
+      <li><math><mi>q</mi></math>：直前に選んだ単語のPOS</li>
+    </ul>
+    <p>現在位置 <math><mi>p</mi></math> から単語候補edge <math><mi>f</mi><mo>=</mo><mo>(</mo><mi>p</mi><mo>,</mo><mi>j</mi><mo>)</mo></math> を選び、そのPOSを <math><mi>r</mi></math> とすると、</p>
+    <div class="math">
+      <math display="block">
+        <mi>DP</mi><mo>[</mo><mi>j</mi><mo>,</mo><mi>r</mi><mo>]</mo>
+        <mo>=</mo>
+        <mi>min</mi><mo>(</mo>
+        <mi>DP</mi><mo>[</mo><mi>j</mi><mo>,</mo><mi>r</mi><mo>]</mo><mo>,</mo>
+        <mi>DP</mi><mo>[</mo><mi>p</mi><mo>,</mo><mi>q</mi><mo>]</mo>
+        <mo>+</mo><mi>T</mi><mo>(</mo><mi>q</mi><mo>,</mo><mi>r</mi><mo>)</mo>
+        <mo>+</mo><mi>w</mi><mo>(</mo><mi>f</mi><mo>)</mo>
+        <mo>)</mo>
+      </math>
+    </div>
+    <pre><code>for previous_pos in possible_previous_pos:
+    for edge in outgoing_edges[position]:
+        current_pos = edge.token.pos
+
+        new_cost = (
+            dp[position][previous_pos]
+            + pos_transition_cost(previous_pos, current_pos)
+            + edge.token.cost
+        )
+
+        dp[edge.end][current_pos] = min(
+            dp[edge.end][current_pos],
+            new_cost,
+        )</code></pre>
+    <p>次の接続コスト計算で必要なのは、今回選んだedgeのPOSだけです。そのため、次の状態にはedge全体ではなく <code>current_pos</code> だけを渡せます。</p>
+
+    <h3>なぜ <code>DP[position]</code> だけでは足りないのか</h3>
+    <p>POSまで捨てて、</p>
+    <div class="math">
+      <math display="block"><mi>DP</mi><mo>[</mo><mi>position</mi><mo>]</mo></math>
+    </div>
+    <p>だけにすることはできません。同じ位置に到達していても、直前POSが <code>noun</code> か <code>verb</code> かによって、次の単語への接続コストが異なるからです。</p>
+    <pre><code>T("noun", "particle")
+T("verb", "particle")</code></pre>
+    <p>つまり、</p>
+    <pre><code>previousEdge は情報が多すぎる
+position だけでは情報が足りない
+previousPOS がBeMEでは必要十分</code></pre>
+    <p>ということです。</p>
+
+    <h3>MeCabでは <code>previousRightId</code> に圧縮できる</h3>
+    <p>MeCabの接続コストは、</p>
+    <div class="math">
+      <math display="block">
+        <mi>c</mi><mo>(</mo><mi>e</mi><mo>,</mo><mi>f</mi><mo>)</mo>
+        <mo>=</mo>
+        <mi>M</mi><mo>[</mo><mi>rightId</mi><mo>(</mo><mi>e</mi><mo>)</mo><mo>]</mo>
+        <mo>[</mo><mi>leftId</mi><mo>(</mo><mi>f</mi><mo>)</mo><mo>]</mo>
+      </math>
+    </div>
+    <p>です。未来の接続計算で直前edgeから必要なのは <code>right_id</code> だけなので、MeCab相当のDPなら、</p>
+    <div class="math">
+      <math display="block"><mi>DP</mi><mo>[</mo><mi>position</mi><mo>,</mo><mi>previousRightId</mi><mo>]</mo></math>
+    </div>
+    <p>まで圧縮できます。</p>
+    <pre><code>new_cost = (
+    dp[position][previous_right_id]
+    + matrix[previous_right_id][edge.left_id]
+    + edge.word_cost
+)
+
+dp[edge.end][edge.right_id] = min(
+    dp[edge.end][edge.right_id],
+    new_cost,
+)</code></pre>
+    <p>同じ <code>verb</code> でも <code>right_id</code> が異なれば、MeCabでは次の語への接続コストが異なるので、別状態として扱います。BeMEはそれらをすべて <code>previousPOS=verb</code> に統合しています。</p>
+
+    <h3>一般化</h3>
+    <p>DPの状態に残すべきなのは、過去を完全に記録する情報ではなく、<strong>未来のコストを決めるために必要な最小限の情報</strong>です。</p>
+    <pre><code>過去のedge列
+    ↓ 圧縮
+直前edge
+    ↓ さらに圧縮
+直前POS</code></pre>
+    <p>この圧縮が成立する条件は、</p>
+    <div class="math">
+      <math display="block">
+        <mi>c</mi><mo>(</mo><mi>e</mi><mo>,</mo><mi>f</mi><mo>)</mo>
+        <mo>=</mo>
+        <mi>T</mi><mo>(</mo><mi>pos</mi><mo>(</mo><mi>e</mi><mo>)</mo><mo>,</mo><mi>pos</mi><mo>(</mo><mi>f</mi><mo>)</mo><mo>)</mo>
+      </math>
+    </div>
+    <p>であり、未来のコストがそれ以前の履歴を参照しないことです。もし接続モデルが直前の表層、直前2単語、文頭からの全文脈を見るなら、<code>previousPOS</code> だけにはまとめられません。</p>
+    <div class="note"><strong>要点：</strong> 同じ位置・同じ直前POSに到達した経路は、BeMEのコストモデルから見ると未来に対して区別不能なので、同じDP状態へまとめられます。</div>
+  </section>
+
+  <div class="summary">
+    <p>一番重要な整理はこれです。</p>
+    <pre><code>位置                         = 頂点
+単語候補                     = 辺
+生起コスト w(e)              = 1本の辺に対する単項コスト
+接続コスト c(e,f)            = 連続する2本の辺に対する二項コスト
+変換                         = 始点から終点への最小コストパス</code></pre>
+    <p>つまり接続コストとは、グラフ理論的には「edgeのコスト」ではなく、<strong>edge transition cost</strong>です。</p>
+  </div>
+</article>
+</body>
+</html>
