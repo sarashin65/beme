@@ -75,7 +75,9 @@ def test_report_contains_provenance_baseline_selection_and_test(tmp_path: Path) 
     assert report["selected_epoch"] == 1
     assert "test" in report["selected_model"]
     assert report["cli"]["seed"] == 4
-    assert not any("/tmp/" in json.dumps(report).split("git_commit")[0] for _ in [0])
+    serialized = json.dumps(report)
+    assert str(tmp_path) not in serialized
+    assert "/tmp/" not in serialized
 
 
 def test_invalid_arguments_and_missing_inputs_fail(tmp_path: Path) -> None:

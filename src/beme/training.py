@@ -198,7 +198,12 @@ def train_scorer(
                     scorer.invalidate(new_weights)
                     updates += 1
             for name in set(scorer.weights.values) | set(totals):
-                totals[name] = totals.get(name, 0.0) + scorer.weights[name]
+                if name not in totals:
+                    # A feature can first appear mid-run.  Its effective value
+                    # for the earlier steps was the default weight, so backfill
+                    # them instead of averaging them in as zero.
+                    totals[name] = (averaging_steps - 1) * initial.default_weight
+                totals[name] += scorer.weights[name]
 
         train_evaluation = SplitEvaluation.from_counts(
             examples=len(train_examples),
@@ -233,11 +238,14 @@ def train_scorer(
             result.epoch,
         ),
     )
+    # The weights below come from the selected epoch, so their provenance
+    # counters must come from that epoch too -- not from the end of the run.
+    selected_metadata = dict(selected.averaged_weights.metadata or {})
     final_metadata = {
         **base_metadata,
         "averaged": True,
-        "updates": updates,
-        "averaging_steps": averaging_steps,
+        "updates": selected_metadata["updates"],
+        "averaging_steps": selected_metadata["averaging_steps"],
         "epochs": epochs,
         "learning_rate": learning_rate,
         "seed": seed,

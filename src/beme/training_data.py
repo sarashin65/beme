@@ -191,7 +191,13 @@ def load_jsonl(path: str | Path) -> tuple[TrainingExample, ...]:
 
     examples: list[TrainingExample] = []
     ids: set[str] = set()
-    for line_number, line in enumerate(text.splitlines(), 1):
+    # Only "\n" separates records: ``str.splitlines`` also breaks on U+2028,
+    # U+2029 and friends, which are legal unescaped inside JSON strings and do
+    # occur in Wikipedia-derived context fields.
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    for line_number, line in enumerate(lines, 1):
         if not line.strip():
             raise _line_error(path, line_number, "blank line is not allowed")
         try:
@@ -243,7 +249,7 @@ def build_manifest(
             ).items())),
             "article_disjoint_verified": False,
             "context_truncated_count": sum(
-                example.context_truncated is not None for example in examples
+                example.context_truncated is True for example in examples
             ),
             "contrast_pair_count": sum(
                 example.contrast_pair_id is not None for example in examples

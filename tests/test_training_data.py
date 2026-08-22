@@ -200,3 +200,32 @@ def test_manifest_records_span_token_min_and_max(tmp_path: Path) -> None:
     manifest = load_splits(paths)[1]
     assert manifest["splits"]["train"]["span_tokens_min"] == 1
     assert manifest["splits"]["train"]["span_tokens_max"] == 1
+
+
+def test_context_truncated_count_counts_only_truncated_rows(tmp_path: Path) -> None:
+    paths = {}
+    for name, flags in (("train", (True, False, False)), ("dev", (False,)), ("test", (True,))):
+        paths[name] = write_jsonl(
+            tmp_path,
+            "".join(
+                json.dumps({"reading": "か", "positive": "可", "context_truncated": flag}) + "\n"
+                for flag in flags
+            ),
+            f"{name}.jsonl",
+        )
+    manifest = load_splits(paths)[1]
+    assert manifest["splits"]["train"]["count"] == 3
+    assert manifest["splits"]["train"]["context_truncated_count"] == 1
+    assert manifest["splits"]["dev"]["context_truncated_count"] == 0
+
+
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\u0085"])
+def test_unicode_line_separators_inside_strings_do_not_split_records(
+    tmp_path: Path, separator: str
+) -> None:
+    context = f"前{separator}後"
+    record = {"reading": "か", "positive": "可", "left_context": context}
+    path = write_jsonl(tmp_path, json.dumps(record, ensure_ascii=False) + "\n")
+    examples = load_jsonl(path)
+    assert len(examples) == 1
+    assert examples[0].left_context == context

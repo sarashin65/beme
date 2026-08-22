@@ -113,3 +113,29 @@ def test_test_evaluation_is_explicitly_after_selection() -> None:
     evaluation = evaluate_test(result, [example("B")], recording_builder, scorer())
     assert evaluation.examples == 1
     assert calls == ["a", "a", "a"]
+
+
+def test_selected_epoch_provenance_describes_the_selected_weights() -> None:
+    result = train_scorer([example("B")], [], builder, scorer(), epochs=3, learning_rate=1.0, seed=7)
+
+    # Epoch 1 wins the dev tie, so the metadata must not carry epoch-3 counters.
+    assert result.selected_epoch == 1
+    selected = result.epochs[0].averaged_weights
+    assert result.averaged_weights.metadata["updates"] == selected.metadata["updates"] == 1
+    assert result.averaged_weights.metadata["averaging_steps"] == selected.metadata["averaging_steps"] == 1
+    assert result.epochs[2].averaged_weights.metadata["averaging_steps"] == 3
+
+
+def test_average_backfills_features_that_first_appear_mid_run() -> None:
+    model = LinearScorer(
+        FeatureExtractor(LEGACY_V1_SPEC), Weights({}, 0.5, feature_spec="legacy_v1")
+    )
+    result = train_scorer(
+        [example("A"), example("B")], [], builder, model, epochs=1, learning_rate=1.0, seed=4
+    )
+
+    # A is predicted correctly at w=0.5 (the default), then B costs one update:
+    # 0.5 + (1 - 3) = -1.5. The average of post-example weights is -0.5, which
+    # only holds if the first step counts the default rather than zero.
+    assert result.current_weights["lex.base_cost"] == -1.5
+    assert result.averaged_weights["lex.base_cost"] == -0.5
