@@ -174,3 +174,31 @@ def test_build_dictionary_rejects_malformed_source_row(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="expected at least 12 CSV fields"):
         build_dictionary(source, tmp_path / "dictionary.tsv", encoding="utf-8")
+
+
+def test_build_dictionary_v2_keeps_pos_detail3_and_conjugation_form(tmp_path: Path) -> None:
+    """Regression: the v2 columns are read from the right IPADIC indices.
+
+    IPADIC lays out 品詞(4) 細分類1(5) 細分類2(6) 細分類3(7) 活用型(8) 活用形(9).
+    Reading 詳細POS as (4, 5, 6) drops 細分類3 into ``conjugation`` and loses
+    活用形 entirely.
+    """
+
+    source = tmp_path / "ipadic.tar.gz"
+    verb = _ipadic_row("在っ", 6_583, "動詞", "アッ", "自立", "*")
+    verb[7] = "*"
+    verb[8] = "五段・ラ行"
+    verb[9] = "連用タ接続"
+    person = _ipadic_row("唖々", 8_770, "名詞", "アア", "固有名詞", "人名")
+    person[7] = "名"
+    _write_source_archive(source, [verb, person])
+
+    output = tmp_path / "dictionary_v2.tsv"
+    build_dictionary(source, output, overlays=[], encoding="utf-8", schema="v2")
+    dictionary = Dictionary.from_tsv(output)
+
+    conjugated = dictionary.lookup("あっ")[0]
+    assert (conjugated.pos_detail, conjugated.conjugation) == ("動詞/自立", "五段・ラ行/連用タ接続")
+
+    named = dictionary.lookup("ああ")[0]
+    assert (named.pos_detail, named.conjugation) == ("名詞/固有名詞/人名/名", "")

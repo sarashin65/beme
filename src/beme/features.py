@@ -11,6 +11,12 @@ from .lattice import LatticeEdge
 
 if TYPE_CHECKING:
     from .lattice import LatticePath
+    from .weights import Weights
+
+
+# Reassociating a sum of n terms costs at most a few ULP; keep a wide margin
+# over that while staying far below any real weight mismatch.
+_RESIDUAL_TOLERANCE = 1e-9
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,12 +149,20 @@ def decomposed_v1_extractor() -> FeatureExtractor:
     return FeatureExtractor(DECOMPOSED_V1_SPEC)
 
 
-def path_features(path: LatticePath, extractor: FeatureExtractor) -> dict[str, float]:
+def path_features(
+    path: LatticePath,
+    extractor: FeatureExtractor,
+    weights: "Weights | None" = None,
+) -> dict[str, float]:
     """Return the feature sum for a path.
 
     ``LatticePath`` deliberately stores tokens rather than edges.  The phase-1
     extractors are position independent, so edges with reconstructed positions
     are sufficient and keep this API independent of the originating lattice.
+
+    ``weights`` must be the weights that produced ``path.cost``.  They are used
+    only to verify the reconstruction; pass the scoring ``LinearScorer``'s
+    weights whenever the path was not scored with the default file.
     """
 
     if not isinstance(extractor, FeatureExtractor):
@@ -168,16 +182,31 @@ def path_features(path: LatticePath, extractor: FeatureExtractor) -> dict[str, f
     # The scorer accumulates edge and transition terms in path order, while a
     # feature vector necessarily groups equal feature names.  Preserve the
     # legacy scorer's bit-exact total by carrying the rounding residual in its
-    # unit-weight lexical feature.  This is only a representation correction;
-    # the feature values remain unchanged apart from a sub-ULP residual.
+    # unit-weight lexical feature.  This is only a representation correction:
+    # the residual is a reassociation artefact and must stay near one ULP.
     if extractor.spec.id == "legacy_v1" and features:
-        from .scorer import legacy_v1_weights
+        if weights is None:
+            from .scorer import legacy_v1_weights
 
-        weights = legacy_v1_weights()
+            weights = legacy_v1_weights()
+        base = weights["lex.base_cost"]
         weighted = sum(weights[name] * value for name, value in features.items())
         residual = path.cost - weighted
         if residual:
-            features["lex.base_cost"] += residual / weights["lex.base_cost"]
+            # A residual larger than the accumulated rounding error means the
+            # weights do not match the ones that scored the path.  Folding it
+            # into lex.base_cost would silently corrupt the vector that drives
+            # the phase-2 updates, so refuse instead.
+            tolerance = _RESIDUAL_TOLERANCE * max(abs(path.cost), abs(weighted), 1.0)
+            if abs(residual) > tolerance:
+                raise ValueError(
+                    "path cost does not match the supplied weights "
+                    f"(cost={path.cost!r}, weighted={weighted!r}); "
+                    "pass the weights that scored the path"
+                )
+            if not base:
+                raise ValueError("cannot carry the residual: lex.base_cost weight is zero")
+            features["lex.base_cost"] += residual / base
     return features
 
 

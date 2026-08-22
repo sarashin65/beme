@@ -42,7 +42,7 @@ def dump_features(
                 "surface": path.surface,
                 "cost": path.cost,
                 "rank": rank,
-                "features": path_features(path, extractor),
+                "features": path_features(path, extractor, scorer.weights),
             }
             lines.append(json.dumps(record, ensure_ascii=False, sort_keys=True))
     output_path.parent.mkdir(parents=True, exist_ok=True)

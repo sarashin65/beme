@@ -208,8 +208,11 @@ def _load_imported_entries(
             duplicate_rows += 1
             if cost >= previous.cost:
                 continue
-        pos_detail = "/".join(value for value in (primary, secondary, tertiary) if value != "*")
-        conjugation = "/".join(value for value in (row[7], row[8]) if value != "*")
+        # IPADIC CSV: 品詞(4) 細分類1(5) 細分類2(6) 細分類3(7) 活用型(8) 活用形(9).
+        # map_ipadic_pos only needs the first three; the detail column keeps
+        # 細分類3 as well, and conjugation is 活用型/活用形.
+        pos_detail = "/".join(value for value in row[4:8] if value != "*")
+        conjugation = "/".join(value for value in (row[8], row[9]) if value != "*")
         entries[key] = DictionaryEntry(
             reading=reading, surface=surface, pos=pos, cost=cost,
             pos_detail=pos_detail, conjugation=conjugation,

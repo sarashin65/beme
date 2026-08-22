@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 import json
 
+import pytest
+
 from beme.dictionary import Dictionary
 from beme.features import (
     FeatureExtractor,
@@ -67,3 +69,42 @@ def test_feature_json_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "features.jsonl"
     path.write_text(json.dumps(document, sort_keys=True) + "\n", encoding="utf-8")
     assert json.loads(path.read_text(encoding="utf-8").splitlines()[0]) == document
+
+
+def test_path_features_reconstruct_cost_under_non_default_weights() -> None:
+    """Regression: the residual correction must use the scoring weights.
+
+    ``path.cost`` comes from whatever ``LinearScorer`` produced the path.
+    Verifying it against the default weights file turns the whole weight
+    difference into a bogus ``lex.base_cost`` term, which would corrupt every
+    phase-2 perceptron update once training moves the weights.
+    """
+
+    dictionary = Dictionary.from_tsv(Path("data/dictionary.tsv"))
+    extractor = legacy_v1_extractor()
+    default = Weights.load(DEFAULT_WEIGHTS_PATH)
+    trained = Weights(
+        {**default.values, "lex.base_cost": 1.5, "trans.default": 0.30},
+        default.default_weight,
+        default.feature_spec,
+    )
+    scorer = LinearScorer(extractor, trained)
+
+    lattice = build_lattice("きしゃのきしゃ", dictionary, allow_literals=True)
+    paths = k_best_viterbi(lattice, beam_width=5, scorer=scorer)
+    assert paths
+
+    for path in paths:
+        features = path_features(path, extractor, trained)
+        # Exact reconstruction is a unit-weight property; with a trained
+        # lex.base_cost the residual carry only restores it to rounding.
+        assert sum(trained[name] * value for name, value in features.items()) == pytest.approx(path.cost)
+        # The true unweighted token-cost sum survives the residual correction.
+        assert features["lex.base_cost"] == pytest.approx(
+            sum(token.cost for token in path.tokens)
+        )
+
+    # Verifying against the wrong weights is a programming error, not a
+    # silently absorbed residual.
+    with pytest.raises(ValueError, match="does not match the supplied weights"):
+        path_features(paths[0], extractor, default)
