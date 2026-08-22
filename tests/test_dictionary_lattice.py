@@ -33,6 +33,104 @@ def test_dictionary_lookup_returns_all_entries_at_a_position(tmp_path: Path) -> 
     assert dictionary.matches_at("かな", 1) == ()
 
 
+def test_dictionary_parses_optional_columns_and_uses_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "dictionary.tsv"
+    path.write_text(
+        "reading\tsurface\tpos\tcost\tpos_detail\tconjugation\tleft_id\tright_id\tsource\traw_cost\n"
+        "かな\t仮名\tnoun\t1.25\t名詞/一般\t五段/基本形\t12\t34\tipadic\t5678\n",
+        encoding="utf-8",
+    )
+
+    entries = Dictionary.from_tsv(path).entries
+
+    assert entries[0].pos_detail == "名詞/一般"
+    assert entries[0].conjugation == "五段/基本形"
+    assert entries[0].left_id == 12
+    assert entries[0].right_id == 34
+    assert entries[0].source == "ipadic"
+    assert entries[0].raw_cost == 5678
+
+    defaults_path = tmp_path / "dictionary-four-column.tsv"
+    defaults_path.write_text(
+        "reading\tsurface\tpos\tcost\nか\t可\tnoun\t2.0\n",
+        encoding="utf-8",
+    )
+    default_entry = Dictionary.from_tsv(defaults_path).entries[0]
+
+    assert default_entry.pos_detail == ""
+    assert default_entry.conjugation == ""
+    assert default_entry.left_id == -1
+    assert default_entry.right_id == -1
+    assert default_entry.source == ""
+    assert default_entry.raw_cost is None
+
+
+def test_dictionary_accepts_optional_columns_in_any_order(tmp_path: Path) -> None:
+    path = tmp_path / "dictionary.tsv"
+    path.write_text(
+        "reading\tsurface\tpos\tcost\traw_cost\tsource\tright_id\tconjugation\tpos_detail\tleft_id\n"
+        "かな\t仮名\tnoun\t1.25\t5678\tlearned\t34\t五段/基本形\t名詞/一般\t12\n",
+        encoding="utf-8",
+    )
+
+    entry = Dictionary.from_tsv(path).entries[0]
+
+    assert (entry.pos_detail, entry.conjugation) == ("名詞/一般", "五段/基本形")
+    assert (entry.left_id, entry.right_id) == (12, 34)
+    assert (entry.source, entry.raw_cost) == ("learned", 5678)
+
+
+def test_dictionary_rejects_unknown_optional_column_with_line_number(tmp_path: Path) -> None:
+    path = tmp_path / "dictionary.tsv"
+    path.write_text(
+        "reading\tsurface\tpos\tcost\tunknown\n"
+        "かな\t仮名\tnoun\t1.0\tvalue\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        Dictionary.from_tsv(path)
+
+    assert str(exc_info.value).startswith(f"{path}: line 1:")
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [("left_id", "-1"), ("left_id", "not-an-integer"), ("source", "external")],
+)
+def test_dictionary_rejects_invalid_optional_values_with_line_number(
+    tmp_path: Path, column: str, value: str
+) -> None:
+    path = tmp_path / "dictionary.tsv"
+    columns = ["reading", "surface", "pos", "cost", column]
+    path.write_text(
+        "\t".join(columns)
+        + "\n"
+        + "\t".join(["かな", "仮名", "noun", "1.0", value])
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        Dictionary.from_tsv(path)
+
+    assert str(exc_info.value).startswith(f"{path}: line 2:")
+
+
+def test_dictionary_reads_four_column_tsv_for_backward_compatibility(tmp_path: Path) -> None:
+    path = write_dictionary(tmp_path, "かな\t仮名\tnoun\t1.0\n")
+
+    entries = Dictionary.from_tsv(path).entries
+
+    assert len(entries) == 1
+    assert (entries[0].reading, entries[0].surface, entries[0].pos, entries[0].cost) == (
+        "かな",
+        "仮名",
+        "noun",
+        1.0,
+    )
+
+
 def test_lattice_contains_multi_segment_edges_and_unknown_fallback(tmp_path: Path) -> None:
     dictionary = Dictionary.from_tsv(
         write_dictionary(tmp_path, "かな\t仮名\tnoun\t1\nか\t可\tnoun\t0\n")
