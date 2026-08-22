@@ -61,9 +61,9 @@ def count_chunk(text: str) -> Counter[tuple[str, str, str]]:
             fields = feature.split(",")
         else:
             fields = tuple(feature)
-        if len(fields) < 7:
+        if len(fields) < 8:
             continue
-        reading = katakana_to_hiragana(fields[6])
+        reading = katakana_to_hiragana(fields[7])
         if not reading or not all("\u3041" <= char <= "\u3096" or char == "ー" for char in reading):
             continue
         pos = map_ipadic_pos(fields[0], fields[1], fields[2])

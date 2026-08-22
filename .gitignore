@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 data/corpus.txt
 data/dictionary_learned.tsv
+data/dictionary_learned_v2.tsv
