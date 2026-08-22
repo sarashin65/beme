@@ -1,0 +1,105 @@
+"""Persistence and process-boundary tests for scorer weights."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+import pytest
+
+from beme.features import legacy_v1_extractor
+from beme.scorer import LinearScorer
+from beme.weights import DEFAULT_WEIGHTS_PATH, Weights
+
+
+def test_weights_round_trip_is_deterministic(tmp_path: Path) -> None:
+    weights = Weights.load(DEFAULT_WEIGHTS_PATH)
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    weights.dump(first)
+    Weights.load(first).dump(second)
+    assert json.loads(first.read_text()) == json.loads(second.read_text())
+    assert first.read_bytes() == second.read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("format", "beme.weights/999"), ("feature_spec", "other_v1")],
+)
+def test_weights_reject_incompatible_metadata(tmp_path: Path, field: str, value: str) -> None:
+    document = json.loads(DEFAULT_WEIGHTS_PATH.read_text())
+    document[field] = value
+    path = tmp_path / "invalid.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(ValueError):
+        Weights.load(path)
+
+
+def test_weights_unknown_feature_strict_flag(tmp_path: Path) -> None:
+    document = json.loads(DEFAULT_WEIGHTS_PATH.read_text())
+    document["weights"]["future.feature"] = 2.0
+    path = tmp_path / "unknown.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown feature"):
+        Weights.load(path)
+    with pytest.warns(UserWarning, match="unknown feature"):
+        loaded = Weights.load(path, strict=False)
+    assert loaded["future.feature"] == 2.0
+
+
+def _run_convert(weight_path: Path, dictionary: Path) -> str:
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "beme",
+            "convert",
+            "きしゃ",
+            "--dictionary",
+            str(dictionary),
+            "--weights",
+            str(weight_path),
+            "--json",
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return process.stdout
+
+
+def test_weights_are_identical_in_a_separate_process(tmp_path: Path) -> None:
+    dictionary = tmp_path / "dictionary.tsv"
+    dictionary.write_text(
+        "reading\tsurface\tpos\tcost\nきしゃ\t記者\tnoun\t0.8\nきしゃ\t汽車\tnoun\t0.9\n",
+        encoding="utf-8",
+    )
+    copied = tmp_path / "copied.json"
+    shutil.copyfile(DEFAULT_WEIGHTS_PATH, copied)
+    assert _run_convert(DEFAULT_WEIGHTS_PATH, dictionary) == _run_convert(copied, dictionary)
+
+
+def test_changing_default_transition_weight_changes_one_best(tmp_path: Path) -> None:
+    dictionary = tmp_path / "dictionary.tsv"
+    dictionary.write_text(
+        "reading\tsurface\tpos\tcost\n"
+        "きしゃ\t記者\tnoun\t0.2\n"
+        "き\t気\tnoun\t0\n"
+        "しゃ\t車\tverb\t0\n",
+        encoding="utf-8",
+    )
+    document = json.loads(DEFAULT_WEIGHTS_PATH.read_text())
+    document["weights"]["trans.default"] = 5.0
+    altered = tmp_path / "altered.json"
+    altered.write_text(json.dumps(document), encoding="utf-8")
+    baseline = json.loads(_run_convert(DEFAULT_WEIGHTS_PATH, dictionary))
+    changed = json.loads(_run_convert(altered, dictionary))
+    assert baseline["candidates"][0]["surface"] != changed["candidates"][0]["surface"]
+
+
+def test_loaded_weights_drive_linear_scorer() -> None:
+    scorer = LinearScorer(legacy_v1_extractor(), Weights.load(DEFAULT_WEIGHTS_PATH))
+    assert scorer.spec_id == "legacy_v1"

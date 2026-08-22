@@ -10,6 +10,9 @@ import sys
 from typing import Sequence
 
 from .converter import Converter, ConversionResult
+from .features import legacy_v1_extractor
+from .scorer import LinearScorer
+from .weights import DEFAULT_WEIGHTS_PATH, Weights
 from .reranker import (
     DEFAULT_CROSS_ENCODER_BATCH_SIZE,
     DEFAULT_CROSS_ENCODER_CACHE_DIR,
@@ -71,6 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=_DEFAULT_DICTIONARY,
         help=f"TSV dictionary (default: {_DEFAULT_DICTIONARY})",
+    )
+    convert.add_argument(
+        "--weights", type=Path, default=DEFAULT_WEIGHTS_PATH,
+        help=f"JSON scorer weights (default: {DEFAULT_WEIGHTS_PATH})",
     )
     convert.add_argument(
         "--preceding-context",
@@ -197,6 +204,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.dictionary,
             beam_width=args.beam_width,
             reranker=_build_reranker(args),
+            scorer=LinearScorer(legacy_v1_extractor(), Weights.load(args.weights)),
         )
         result = converter.convert(
             args.reading,

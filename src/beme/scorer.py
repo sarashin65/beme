@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Hashable
 from typing import TYPE_CHECKING, Protocol
 
-from .weights import Weights
+from .weights import DEFAULT_WEIGHTS_PATH, Weights
 
 if TYPE_CHECKING:
     from .features import FeatureExtractor
@@ -21,26 +21,7 @@ class Scorer(Protocol):
 
 
 def legacy_v1_weights() -> Weights:
-    values = {
-        "lex.base_cost": 1.0,
-        "trans.bos": 0.0,
-        "trans.pair.noun>particle": 0.05,
-        "trans.pair.proper_noun>particle": 0.05,
-        "trans.pair.pronoun>particle": 0.05,
-        "trans.pair.particle>noun": 0.03,
-        "trans.pair.particle>proper_noun": 0.03,
-        "trans.pair.particle>verb": 0.04,
-        "trans.pair.particle>adjective": 0.04,
-        "trans.pair.verb>particle": 0.05,
-        "trans.pair.adjective>auxiliary": 0.03,
-        "trans.pair.verb>auxiliary": 0.03,
-        "trans.pair.unknown>unknown": 0.20,
-        "trans.pair.unknown>particle": 0.10,
-        "trans.pair.particle>unknown": 0.10,
-        "trans.same_pos": 0.08,
-        "trans.default": 0.12,
-    }
-    return Weights(values)
+    return Weights.load(DEFAULT_WEIGHTS_PATH)
 
 
 class LinearScorer:
