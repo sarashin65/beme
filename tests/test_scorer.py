@@ -40,3 +40,44 @@ def test_legacy_features_have_one_active_feature_each() -> None:
 def test_legacy_transition_weights_match_table() -> None:
     weights = legacy_v1_weights()
     assert {pair: weights[f"trans.pair.{pair[0]}>{pair[1]}"] for pair in _TRANSITION_COSTS} == _TRANSITION_COSTS
+
+
+def test_scorer_caches_reuse_entries_across_positions_instead_of_growing_unbounded() -> None:
+    """Regression for issue #9 Phase 1 review M3.
+
+    LinearScorer._edge_cache/_transition_cache used to key on the whole
+    LatticeEdge, which carries the input position (start/end). Both feature
+    extractors are documented as position independent (see
+    features.path_features's docstring), so an edge that wraps an equal
+    Token but sits at a different input position must hit the same cache
+    entry. Before the fix these were two entries per distinct position
+    instead of one per distinct token, which is why a converter that keeps
+    reusing the same scorer across many conversions (scripts/evaluate.py; a
+    long-lived IME process) grew both caches without bound -- 27,099 /
+    169,847 entries for just 300 short mozc readings.
+    """
+    scorer = LinearScorer(FeatureExtractor(LEGACY_V1_SPEC), legacy_v1_weights())
+    token = Token("か", "可", "noun", 1.25)
+    near = LatticeEdge(0, 1, token)
+    far = LatticeEdge(37, 38, token)  # same token, unrelated input position
+
+    assert scorer.edge_cost(near) == scorer.edge_cost(far)
+    assert len(scorer._edge_cache) == 1
+
+    assert scorer.transition_cost("verb", near) == scorer.transition_cost("verb", far)
+    assert len(scorer._transition_cache) == 1
+
+
+def test_scorer_cache_memoization_does_not_change_computed_cost() -> None:
+    """Memoization must be a pure optimization: a cache hit and a fresh
+    computation for the same token must agree bit-for-bit."""
+    extractor = FeatureExtractor(LEGACY_V1_SPEC)
+    weights = legacy_v1_weights()
+    memoized = LinearScorer(extractor, weights)
+    fresh = LinearScorer(extractor, weights)
+    token = Token("きしゃ", "汽車", "noun", 2.0)
+    edge = LatticeEdge(0, 3, token)
+
+    first = memoized.edge_cost(edge)
+    second = memoized.edge_cost(edge)  # served from cache
+    assert first == second == fresh.edge_cost(edge)

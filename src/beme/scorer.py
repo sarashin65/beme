@@ -9,7 +9,7 @@ from .weights import DEFAULT_WEIGHTS_PATH, Weights
 
 if TYPE_CHECKING:
     from .features import FeatureExtractor
-    from .lattice import LatticeEdge
+    from .lattice import LatticeEdge, Token
 
 
 class Scorer(Protocol):
@@ -37,8 +37,19 @@ class LinearScorer:
         self.extractor = extractor
         self.weights = weights
         self.spec_id = extractor.spec.id
-        self._edge_cache: dict[LatticeEdge, float] = {}
-        self._transition_cache: dict[tuple[Hashable | None, LatticeEdge], float] = {}
+        # Keyed by edge.token, not by the LatticeEdge itself: lexical_features
+        # and transition_features are documented as position-independent (see
+        # features.path_features), so edge.start/edge.end carry no scoring
+        # information -- they only fragmented the cache into one entry per
+        # (position, token) pair instead of one per distinct token. A
+        # long-lived Converter that keeps reusing the same scorer across many
+        # conversions (scripts/evaluate.py; an IME process) never evicts
+        # anything, so that fragmentation grew the cache without bound
+        # (issue #9 Phase 1 review, M3). Keying by the token bounds it by the
+        # number of distinct tokens ever scored -- for a fixed dictionary,
+        # that is the dictionary plus a handful of literal/unknown variants.
+        self._edge_cache: dict[Token, float] = {}
+        self._transition_cache: dict[tuple[Hashable | None, Token], float] = {}
 
     def state_key(self, edge: LatticeEdge) -> Hashable:
         return edge.token.pos
@@ -50,12 +61,13 @@ class LinearScorer:
         return total
 
     def edge_cost(self, edge: LatticeEdge) -> float:
-        if edge not in self._edge_cache:
-            self._edge_cache[edge] = self._dot(self.extractor.lexical_features(edge))
-        return self._edge_cache[edge]
+        token = edge.token
+        if token not in self._edge_cache:
+            self._edge_cache[token] = self._dot(self.extractor.lexical_features(edge))
+        return self._edge_cache[token]
 
     def transition_cost(self, previous: Hashable | None, edge: LatticeEdge) -> float:
-        key = (previous, edge)
+        key = (previous, edge.token)
         if key not in self._transition_cache:
             self._transition_cache[key] = self._dot(self.extractor.transition_features(previous, edge))
         return self._transition_cache[key]
