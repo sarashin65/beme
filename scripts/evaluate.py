@@ -18,6 +18,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from beme.converter import Converter  # noqa: E402
+from beme.dictionary import Dictionary  # noqa: E402
 from beme.features import extractor_for  # noqa: E402
 from beme.scorer import LinearScorer  # noqa: E402
 from beme.weights import DEFAULT_WEIGHTS_PATH, Weights  # noqa: E402
@@ -259,9 +260,10 @@ def main(argv: list[str] | None = None) -> int:
         # feature_spec=None: this script has no independent expectation, it
         # dispatches on whatever the file declares (see Weights.load).
         weights = Weights.load(args.weights, feature_spec=None)
-        extractor = extractor_for(weights.feature_spec)
-        converter = Converter.from_tsv(
-            args.dictionary,
+        dictionary = Dictionary.from_tsv(args.dictionary)
+        extractor = extractor_for(weights.feature_spec, dictionary.reading_conditional)
+        converter = Converter(
+            dictionary,
             beam_width=args.beam_width,
             reranker=measured_reranker,
             rerank_k=args.rerank_k,

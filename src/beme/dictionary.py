@@ -104,6 +104,20 @@ class Dictionary:
             reading: tuple(values) for reading, values in grouped.items()
         }
         self._readings = tuple(self._entries_by_reading)
+        self.reading_conditional: dict[str, tuple[float, int]] = {}
+        from .ipadic import READING_CONDITIONAL_TEMPERATURE
+
+        for reading, reading_entries in self._entries_by_reading.items():
+            raw_costs = [entry.raw_cost for entry in reading_entries if entry.raw_cost is not None]
+            if raw_costs:
+                scaled = [-raw / READING_CONDITIONAL_TEMPERATURE for raw in raw_costs]
+                maximum = max(scaled)
+                log_partition = maximum + math.log(
+                    sum(math.exp(value - maximum) for value in scaled)
+                )
+            else:
+                log_partition = 0.0
+            self.reading_conditional[reading] = (log_partition, len(reading_entries))
 
     @classmethod
     def from_tsv(cls, path: str | Path) -> "Dictionary":

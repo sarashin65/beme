@@ -141,7 +141,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     manifest = _stable_manifest(raw_manifest, paths)
     dictionary = Dictionary.from_tsv(args.dictionary)
     initial_weights = Weights.load(args.initial_weights, feature_spec=None)
-    extractor = _extractor(initial_weights.feature_spec)
+    extractor = extractor_for(initial_weights.feature_spec, dictionary.reading_conditional)
     dictionary_sha256 = _sha256(args.dictionary)
     initial_weights_sha256 = _sha256(args.initial_weights)
     metadata = {

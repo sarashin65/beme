@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections.abc import Mapping
 from functools import lru_cache
+import math
 from typing import TYPE_CHECKING, Hashable, NamedTuple
 import unicodedata
 
@@ -86,10 +87,15 @@ LEGACY_V1_SPEC = FeatureSpec.legacy_v1()
 class FeatureExtractor:
     """Extract the active lexical and transition features for an edge."""
 
-    def __init__(self, spec: FeatureSpec = LEGACY_V1_SPEC) -> None:
+    def __init__(
+        self,
+        spec: FeatureSpec = LEGACY_V1_SPEC,
+        reading_conditional: Mapping[str, tuple[float, int]] | None = None,
+    ) -> None:
         if not isinstance(spec, FeatureSpec):
             raise TypeError("spec must be a FeatureSpec")
         self.spec = spec
+        self.reading_conditional = reading_conditional
 
     def lexical_features(self, edge: LatticeEdge) -> dict[str, float]:
         if self.spec.family == "decomposed_v1":
@@ -141,6 +147,17 @@ class FeatureExtractor:
             else:
                 # v1 dictionaries and hand-written overlays have no raw IPADIC cost.
                 features["lex.base_cost"] = token.cost
+            if {"lex.reading_cond_logprob", "lex.reading_candidate_count"} & set(self.spec.lexical_features):
+                if self.reading_conditional is None:
+                    raise ValueError("reading conditional table is required for this feature specification")
+                log_partition, count = self.reading_conditional.get(token.reading, (0.0, 0))
+                if token.raw_cost is not None:
+                    from .ipadic import READING_CONDITIONAL_TEMPERATURE
+
+                    features["lex.reading_cond_logprob"] = (
+                        token.raw_cost / READING_CONDITIONAL_TEMPERATURE + log_partition
+                    )
+                features["lex.reading_candidate_count"] = math.log1p(count)
             return {name: value for name, value in features.items()
                     if name in self.spec.lexical_features}
         if self.spec.family != "legacy_v1":
@@ -227,6 +244,29 @@ MATRIX_V1_POS_PAIRS_SPEC = FeatureSpec(
     MATRIX_V1_SPEC.transition_state,
 )
 
+FREQ_LEXICAL_FEATURES = (
+    "lex.reading_cond_logprob", "lex.reading_candidate_count",
+)
+FREQ_V1_SPEC = FeatureSpec(
+    "decomposed_v1+freq_v1",
+    (*DECOMPOSED_V1_SPEC.lexical_features, *FREQ_LEXICAL_FEATURES),
+    DECOMPOSED_V1_SPEC.transition_features,
+    DECOMPOSED_V1_SPEC.family,
+)
+FREQ_V1_NO_IPADIC_SPEC = FeatureSpec(
+    "decomposed_v1+freq_v1-no_ipadic_cost",
+    tuple(name for name in FREQ_V1_SPEC.lexical_features if name != "lex.ipadic_cost_mapped"),
+    FREQ_V1_SPEC.transition_features,
+    FREQ_V1_SPEC.family,
+)
+MATRIX_FREQ_V1_SPEC = FeatureSpec(
+    "decomposed_v1+matrix_v1+freq_v1",
+    FREQ_V1_SPEC.lexical_features,
+    MATRIX_V1_SPEC.transition_features,
+    MATRIX_V1_SPEC.family,
+    MATRIX_V1_SPEC.transition_state,
+)
+
 
 _ABLATION_REMOVALS = {
     "decomposed_v1-lex_only": set(DECOMPOSED_V1_SPEC.transition_features),
@@ -248,6 +288,9 @@ _SPEC_REGISTRY = {
     },
     MATRIX_V1_SPEC.id: MATRIX_V1_SPEC,
     MATRIX_V1_POS_PAIRS_SPEC.id: MATRIX_V1_POS_PAIRS_SPEC,
+    FREQ_V1_SPEC.id: FREQ_V1_SPEC,
+    FREQ_V1_NO_IPADIC_SPEC.id: FREQ_V1_NO_IPADIC_SPEC,
+    MATRIX_FREQ_V1_SPEC.id: MATRIX_FREQ_V1_SPEC,
 }
 
 
@@ -258,8 +301,11 @@ def resolve_spec(spec_id: str) -> FeatureSpec:
         raise ValueError(f"unsupported feature specification: {spec_id!r}") from exc
 
 
-def extractor_for(spec_id: str) -> FeatureExtractor:
-    return FeatureExtractor(resolve_spec(spec_id))
+def extractor_for(
+    spec_id: str,
+    reading_conditional: Mapping[str, tuple[float, int]] | None = None,
+) -> FeatureExtractor:
+    return FeatureExtractor(resolve_spec(spec_id), reading_conditional)
 
 
 def registered_spec_ids() -> tuple[str, ...]:
@@ -363,6 +409,9 @@ __all__ = [
     "DECOMPOSED_V1_SPEC",
     "MATRIX_V1_SPEC",
     "MATRIX_V1_POS_PAIRS_SPEC",
+    "FREQ_V1_SPEC",
+    "FREQ_V1_NO_IPADIC_SPEC",
+    "MATRIX_FREQ_V1_SPEC",
     "TransitionState",
     "decomposed_v1_extractor",
     "extractor_for",

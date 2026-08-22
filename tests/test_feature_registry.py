@@ -31,7 +31,8 @@ def test_registry_contains_the_two_bases_and_six_ablations() -> None:
         "decomposed_v1-trans_only", "decomposed_v1-no_ipadic_cost",
         "decomposed_v1-no_source", "decomposed_v1-no_katakana",
         "decomposed_v1-no_shape", "decomposed_v1+matrix_v1",
-        "decomposed_v1+matrix_v1-pos_pairs",
+        "decomposed_v1+matrix_v1-pos_pairs", "decomposed_v1+freq_v1",
+        "decomposed_v1+freq_v1-no_ipadic_cost", "decomposed_v1+matrix_v1+freq_v1",
     )
 
 
@@ -44,7 +45,7 @@ def test_base_extractors_are_unchanged() -> None:
 
 @pytest.mark.parametrize("spec_id", registered_spec_ids()[2:])
 def test_ablation_outputs_are_declared(spec_id: str) -> None:
-    extractor = extractor_for(spec_id)
+    extractor = extractor_for(spec_id, {})
     edge = LatticeEdge(0, 2, Token("きしゃ", "汽車", "noun", 2.0, raw_cost=3500, source="ipadic"))
     lexical = extractor.lexical_features(edge)
     transition = extractor.transition_features(None, edge)
