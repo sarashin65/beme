@@ -38,7 +38,7 @@ def _normalized(value: str) -> str:
 
 
 def split_for_article(article_id: str, seed: int, ranges: list[list[Any]]) -> str | None:
-    value = int.from_bytes(hashlib.sha256(f"{seed}:{article_id}".encode()).digest(), "big") % 10000
+    value = int.from_bytes(hashlib.sha256(f"{seed}:{article_id}".encode()).digest()[:8], "big") % 10000
     lower = 0
     for name, upper in ranges:
         if lower <= value < int(upper):
