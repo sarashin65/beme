@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 
 import pytest
 
@@ -14,6 +17,71 @@ def write_dictionary(tmp_path: Path, text: str) -> Path:
     path = tmp_path / "dictionary.tsv"
     path.write_text("reading\tsurface\tpos\tcost\n" + text, encoding="utf-8")
     return path
+
+
+def test_import_does_not_require_the_weights_file(tmp_path: Path) -> None:
+    """Regression for issue #9 Phase 1 review M2.
+
+    lattice.py used to build ``_TRANSITION_COSTS`` at module import time by
+    calling ``legacy_v1_weights()``, which opens and parses
+    data/weights/legacy_v1.json through a repo-relative path
+    (``weights.DEFAULT_WEIGHTS_PATH``). A wheel install does not necessarily
+    ship that path (pyproject.toml declares no package-data), so a bare
+    ``import beme`` outside a repo checkout raised FileNotFoundError -- a
+    regression from before PR #10 (issue #9 Phase 1), where the transition
+    cost table was a hardcoded literal instead of something built from the
+    weights file at import time.
+
+    Reproduce "outside a repo checkout" by copying only the package source
+    -- no sibling data/ directory -- to an unrelated directory and importing
+    it from there in a fresh interpreter.
+    """
+    package_root = tmp_path / "isolated"
+    package_root.mkdir()
+    shutil.copytree(Path(__file__).resolve().parents[1] / "src" / "beme", package_root / "beme")
+
+    process = subprocess.run(
+        [sys.executable, "-c", "import beme"],
+        cwd=package_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert process.returncode == 0, process.stderr
+
+
+def test_transition_cost_table_leaks_no_loop_variables_into_module_namespace() -> None:
+    """Regression for issue #9 Phase 1 review M2.
+
+    The module-scope loop that used to build ``_TRANSITION_COSTS`` left its
+    loop variables (``_name``, ``_value``, ``_previous``, ``_current``) as
+    permanent attributes of ``beme.lattice``.
+    """
+    import beme.lattice as lattice_module
+
+    for leaked in ("_name", "_value", "_previous", "_current"):
+        assert not hasattr(lattice_module, leaked), f"{leaked} leaked into beme.lattice namespace"
+
+
+def test_pos_transition_cost_reads_bos_same_pos_and_default_from_weights(tmp_path: Path) -> None:
+    """Regression for issue #9 Phase 1 review M2.
+
+    ``pos_transition_cost`` used to hardcode 0.0/0.08/0.12 as the fallback
+    values for trans.bos/trans.same_pos/trans.default instead of reading them
+    from legacy_v1_weights() the way it already did for trans.pair.*, so a
+    weights file that changed one of those three would silently disagree with
+    what LinearScorer actually scores paths with.
+    """
+    from beme.lattice import _transition_cost_table
+    from beme.scorer import legacy_v1_weights
+
+    _transition_cost_table.cache_clear()
+    weights = legacy_v1_weights()
+    assert pos_transition_cost(None, "noun") == weights["trans.bos"]
+    assert pos_transition_cost("noun", "noun") == weights["trans.same_pos"]
+    assert pos_transition_cost("noun", "adverb") == weights["trans.default"]
+    _transition_cost_table.cache_clear()
 
 
 def test_dictionary_lookup_returns_all_entries_at_a_position(tmp_path: Path) -> None:

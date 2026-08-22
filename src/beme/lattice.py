@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import math
 import heapq
 from itertools import count
@@ -226,30 +227,62 @@ def build_lattice(
 
 # Compatibility view for callers of the old public helper.  The values live
 # in the legacy scorer; this mapping deliberately contains no second table.
-from .scorer import legacy_v1_weights
+#
+# Built lazily (see _transition_cost_table and module __getattr__ below)
+# rather than at import time: legacy_v1_weights() opens and parses
+# data/weights/legacy_v1.json, and a wheel install does not necessarily ship
+# that repo-relative path (see weights.DEFAULT_WEIGHTS_PATH). Doing that I/O
+# as a side effect of "import beme" made even a bare import fail once the
+# package left the repo checkout -- a regression from before Phase 1
+# (issue #9 Phase 1 review, M2).
 
-_TRANSITION_COSTS: dict[tuple[str, str], float] = {}
-for _name, _value in legacy_v1_weights().items():
-    if _name.startswith("trans.pair."):
-        _previous, _current = _name.removeprefix("trans.pair.").split(">", 1)
-        _TRANSITION_COSTS[(_previous, _current)] = _value
+
+@functools.lru_cache(maxsize=1)
+def _transition_cost_table() -> tuple[dict[tuple[str, str], float], float, float, float]:
+    """Return ``(pairs, trans.bos, trans.same_pos, trans.default)`` from the
+    legacy weights file.  Cached: legacy_v1_weights() is only read once."""
+
+    # Keep the import lazy, matching _resolve_scorer(): scorer implementations
+    # use lattice data classes, and this keeps a bare "import beme" free of
+    # file I/O regardless of import order.
+    from .scorer import legacy_v1_weights
+
+    weights = legacy_v1_weights()
+    pairs: dict[tuple[str, str], float] = {}
+    for name, value in weights.items():
+        if name.startswith("trans.pair."):
+            previous, current = name.removeprefix("trans.pair.").split(">", 1)
+            pairs[(previous, current)] = value
+    return pairs, weights["trans.bos"], weights["trans.same_pos"], weights["trans.default"]
+
+
+def __getattr__(name: str) -> object:
+    # PEP 562: keeps `from beme.lattice import _TRANSITION_COSTS` working
+    # (tests/test_scorer.py) without paying for it at import time.
+    if name == "_TRANSITION_COSTS":
+        pairs, _bos, _same_pos, _default = _transition_cost_table()
+        return pairs
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def pos_transition_cost(previous_pos: str | None, current_pos: str) -> float:
-    """Return the fixed Phase 1 POS-boundary cost.
+    """Return the fixed Phase 1 POS-boundary cost, read from legacy weights.
 
-    The first token has no BOS penalty.  Known natural boundaries use the
-    small table above; same-POS and otherwise unseen transitions receive 0.08
-    and 0.12 respectively.
+    The first token has no BOS penalty (``trans.bos``).  Known natural
+    boundaries use the pair table; same-POS and otherwise unseen transitions
+    fall back to ``trans.same_pos`` and ``trans.default``.  All four values
+    come from the same legacy_v1_weights() document that LinearScorer scores
+    with -- there is no second, hardcoded source of truth for them.
     """
 
+    pairs, bos, same_pos, default = _transition_cost_table()
     if previous_pos is None:
-        return 0.0
-    if (previous_pos, current_pos) in _TRANSITION_COSTS:
-        return _TRANSITION_COSTS[(previous_pos, current_pos)]
+        return bos
+    if (previous_pos, current_pos) in pairs:
+        return pairs[(previous_pos, current_pos)]
     if previous_pos == current_pos:
-        return 0.08
-    return 0.12
+        return same_pos
+    return default
 
 
 def backward_viterbi(lattice: Lattice, scorer: Scorer | None = None) -> tuple[float, ...]:
