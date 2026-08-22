@@ -1,0 +1,1 @@
+{"id":"train-1","source":"synthetic","article_id":"article-train","left_context":"前","reading":"かな","right_context":"後","target_surface":"仮名","candidates":["仮名","佳名"],"viterbi_costs":[1.0,2.0],"frequency_bucket":{"positive":"mid"}}
