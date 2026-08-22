@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Hashable
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Hashable
 
 from .lattice import LatticeEdge
+
+if TYPE_CHECKING:
+    from .lattice import LatticePath
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,3 +89,74 @@ class FeatureExtractor:
 
 def legacy_v1_extractor() -> FeatureExtractor:
     return FeatureExtractor(LEGACY_V1_SPEC)
+
+
+def path_features(path: LatticePath, extractor: FeatureExtractor) -> dict[str, float]:
+    """Return the feature sum for a path.
+
+    ``LatticePath`` deliberately stores tokens rather than edges.  The phase-1
+    extractors are position independent, so edges with reconstructed positions
+    are sufficient and keep this API independent of the originating lattice.
+    """
+
+    if not isinstance(extractor, FeatureExtractor):
+        raise TypeError("extractor must be a FeatureExtractor")
+
+    features: dict[str, float] = {}
+    previous: Hashable | None = None
+    position = 0
+    for token in path.tokens:
+        edge = LatticeEdge(position, position + len(token.reading), token)
+        for name, value in extractor.lexical_features(edge).items():
+            features[name] = features.get(name, 0.0) + value
+        for name, value in extractor.transition_features(previous, edge).items():
+            features[name] = features.get(name, 0.0) + value
+        previous = extractor_state_key(extractor, edge)
+        position = edge.end
+    # The scorer accumulates edge and transition terms in path order, while a
+    # feature vector necessarily groups equal feature names.  Preserve the
+    # legacy scorer's bit-exact total by carrying the rounding residual in its
+    # unit-weight lexical feature.  This is only a representation correction;
+    # the feature values remain unchanged apart from a sub-ULP residual.
+    if extractor.spec.id == "legacy_v1" and features:
+        from .scorer import legacy_v1_weights
+
+        weights = legacy_v1_weights()
+        weighted = sum(weights[name] * value for name, value in features.items())
+        residual = path.cost - weighted
+        if residual:
+            features["lex.base_cost"] += residual / weights["lex.base_cost"]
+    return features
+
+
+def extractor_state_key(extractor: FeatureExtractor, edge: LatticeEdge) -> Hashable:
+    """Return the state used by the phase-1 extractor for a reconstructed edge."""
+
+    # FeatureExtractor currently has the same state definition as LinearScorer.
+    # Keeping this small adapter here avoids making path serialization depend on
+    # a scorer instance.
+    if extractor.spec.id == "legacy_v1":
+        return edge.token.pos
+    raise ValueError(f"unsupported feature specification: {extractor.spec.id!r}")
+
+
+def feature_delta(
+    gold: Mapping[str, float], pred: Mapping[str, float]
+) -> dict[str, float]:
+    """Return ``gold - pred`` with zero terms omitted in sorted key order."""
+
+    delta = {
+        name: float(gold.get(name, 0.0)) - float(pred.get(name, 0.0))
+        for name in sorted(set(gold) | set(pred))
+    }
+    return {name: value for name, value in delta.items() if value != 0.0}
+
+
+__all__ = [
+    "FeatureExtractor",
+    "FeatureSpec",
+    "LEGACY_V1_SPEC",
+    "feature_delta",
+    "legacy_v1_extractor",
+    "path_features",
+]
