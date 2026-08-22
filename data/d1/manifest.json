@@ -1,0 +1,102 @@
+{
+  "artifacts_sha256": {
+    "articles": "7858a39ff39817edb4fc379dc03364fa1746bce8e6507ad003813e7842a20a6e",
+    "audit": "71d584f5b1b74e1fae67e8165147ce15638f5aa143f7a9693a812c257eed3ee3",
+    "dev": "8a6aea13dcc1caf61708cf94f9db836e14ba3544fa5c4c522d9668d418182f47",
+    "test": "7b0ad8ff3f9abf11ccfb9488214db0199ecd9b06d07928dea0fb6c8681f6f2ff",
+    "train": "b9609547a66d8b15ab72d416b1f964b62881fa1d77d3ddd2cd900d7d3c23baa8"
+  },
+  "audit": {
+    "audited": 200,
+    "completed": true,
+    "correct": 199,
+    "data_gate_pass": true,
+    "incorrect": 1,
+    "label_accuracy": 0.995,
+    "sample_size": 200,
+    "seed": 20260822
+  },
+  "candidate_generation": {
+    "ambiguous_surface_count": 12904,
+    "ambiguous_surface_readings_excluded": true,
+    "article_sample_every_after_pool_fill": 5,
+    "beam_width": 64,
+    "candidate_k": 64,
+    "context_characters_each_side": 48,
+    "cross_split_normalized_group_deduplication": true,
+    "deduplication_precedence": [
+      "test",
+      "dev",
+      "train"
+    ],
+    "dictionary": "/home/sarashin/work/beme/data/dictionary.tsv",
+    "dictionary_sha256": "efcdf5a1baeaeb74f8ca6c85552d6fac335d40ad274f1e77181c21c8f37f617b",
+    "max_reading_characters": 16,
+    "max_span_tokens": 3,
+    "multi_span_sample_every": 20,
+    "per_reading_cap": 8,
+    "single_cjk_surface_excluded": true
+  },
+  "contrast_pairs": {
+    "dev": 22,
+    "test": 64,
+    "train": 436
+  },
+  "counts": {
+    "dev": 1000,
+    "test": 2000,
+    "train": 10000
+  },
+  "created_on": "2026-08-22",
+  "evaluation_overlap": {
+    "method": "normalized AJIMEE original/context and handmade context substring exclusion",
+    "minimum_normalized_characters": 12,
+    "mozc_note": "Mozc provides readings and assertions, not source documents; shared vocabulary is not treated as document leakage.",
+    "term_count": 238
+  },
+  "pool_counts": {
+    "dev": 2000,
+    "test": 4000,
+    "train": 20990
+  },
+  "schema_version": 1,
+  "source": {
+    "articles_excluded_for_evaluation_overlap": 3,
+    "articles_processed": 5104,
+    "articles_sampled_for_task_groups": 994,
+    "config": "20231101.ja",
+    "dataset": "wikimedia/wikipedia",
+    "license": "CC BY-SA 3.0 and GFDL",
+    "license_url": "https://huggingface.co/datasets/wikimedia/wikipedia",
+    "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+    "source_utf8_bytes_scanned": 104852271
+  },
+  "split": {
+    "algorithm": "sha256(seed:article_id) modulo 10000",
+    "ranges": [
+      [
+        "train",
+        7700
+      ],
+      [
+        "dev",
+        8500
+      ],
+      [
+        "test",
+        10000
+      ]
+    ],
+    "seed": 20260822
+  },
+  "unique_articles": {
+    "dev": 65,
+    "test": 129,
+    "train": 696
+  },
+  "unique_readings": {
+    "dev": 976,
+    "test": 1925,
+    "train": 8964
+  }
+}
