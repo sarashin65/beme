@@ -80,6 +80,40 @@ def test_decomposed_script_features_round_trip(tmp_path: Path) -> None:
         assert loaded[name] == 0.5
 
 
+def test_weights_load_rejects_non_object_json_cleanly(tmp_path: Path) -> None:
+    """Regression for issue #9 Phase 1 review L1.
+
+    Weights.load() already validated a non-dict JSON document correctly; the
+    bug was CLI/evaluate.py pre-reading the file with a bare ``.get()`` call
+    to peek "feature_spec" before ever reaching this check, which raised an
+    uncaught AttributeError for a top-level JSON array or scalar. This test
+    guards Weights.load() itself, which callers are now expected to rely on
+    exclusively (feature_spec=None) instead of re-parsing the file.
+    """
+    path = tmp_path / "not_an_object.json"
+    path.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="must contain a JSON object"):
+        Weights.load(path, feature_spec=None)
+
+
+def test_weights_load_feature_spec_none_autodetects_and_still_validates(tmp_path: Path) -> None:
+    """Regression for issue #9 Phase 1 review L1.
+
+    feature_spec=None must not just skip validation outright: the loaded
+    Weights.feature_spec should reflect what the file actually declares, and
+    unknown feature names for that declared spec must still be rejected.
+    """
+    loaded = Weights.load(DECOMPOSED_WEIGHTS_PATH, feature_spec=None)
+    assert loaded.feature_spec == "decomposed_v1"
+
+    document = json.loads(DECOMPOSED_WEIGHTS_PATH.read_text())
+    document["weights"]["totally.unknown"] = 1.0
+    path = tmp_path / "unknown_decomposed.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown feature"):
+        Weights.load(path, feature_spec=None)
+
+
 def _run_convert(weight_path: Path, dictionary: Path) -> str:
     process = subprocess.run(
         [

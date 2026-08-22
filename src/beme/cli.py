@@ -200,9 +200,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command != "convert":
         parser.error("a command is required")
     try:
-        with args.weights.open(encoding="utf-8") as stream:
-            weight_spec = json.load(stream).get("feature_spec", "legacy_v1")
-        weights = Weights.load(args.weights, feature_spec=weight_spec)
+        # feature_spec=None: the CLI has no independent expectation, it
+        # dispatches on whatever the file declares (see Weights.load).
+        weights = Weights.load(args.weights, feature_spec=None)
         extractor = (
             decomposed_v1_extractor()
             if weights.feature_spec == "decomposed_v1"

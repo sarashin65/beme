@@ -145,6 +145,33 @@ def test_cli_context_options_rerank_and_are_reported_in_json(tmp_path: Path) -> 
     assert business_payload["reranked"] is True
 
 
+def test_cli_rejects_non_object_weights_json_without_traceback(tmp_path: Path) -> None:
+    """Regression for issue #9 Phase 1 review L1.
+
+    The CLI used to pre-read --weights with a bare ``json.load(stream).get(
+    "feature_spec", ...)`` to figure out which extractor to build. A
+    top-level JSON array (or any non-dict) has no ``.get``, so that call
+    raised an uncaught AttributeError -- an unhandled traceback instead of a
+    clean argparse error -- even though Weights.load() itself already
+    rejects non-dict documents correctly.
+    """
+    weights_path = tmp_path / "weights.json"
+    weights_path.write_text("[]", encoding="utf-8")
+    process = run_cli(
+        tmp_path,
+        "convert",
+        "かみ",
+        "--dictionary",
+        str(write_dictionary(tmp_path)),
+        "--weights",
+        str(weights_path),
+    )
+
+    assert process.returncode != 0
+    assert "error" in process.stderr.lower()
+    assert "traceback" not in process.stderr.lower()
+
+
 def test_invalid_cli_input_is_an_argparse_error_without_traceback(tmp_path: Path) -> None:
     process = run_cli(
         tmp_path,
