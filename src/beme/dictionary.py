@@ -12,12 +12,61 @@ from typing import Iterable
 
 
 _REQUIRED_COLUMNS = ("reading", "surface", "pos", "cost")
+_OPTIONAL_COLUMNS = (
+    "pos_detail",
+    "conjugation",
+    "left_id",
+    "right_id",
+    "source",
+    "raw_cost",
+)
+_OPTIONAL_COLUMN_SET = frozenset(_OPTIONAL_COLUMNS)
+_SOURCES = frozenset(("ipadic", "overlay", "learned", "manual"))
 
 
 def is_hiragana(text: str) -> bool:
     """Return whether *text* consists only of hiragana and ``ー``."""
 
     return bool(text) and all("\u3041" <= char <= "\u3096" or char == "ー" for char in text)
+
+
+def _parse_non_negative_int(
+    value: str | None,
+    name: str,
+    source: Path,
+    line_number: int,
+    *,
+    default: int,
+) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{source}: line {line_number}: {name} must be a non-negative integer, got {value!r}"
+        ) from exc
+    if parsed < 0:
+        raise ValueError(
+            f"{source}: line {line_number}: {name} must be a non-negative integer, got {value!r}"
+        )
+    return parsed
+
+
+def _parse_optional_int(
+    value: str | None,
+    name: str,
+    source: Path,
+    line_number: int,
+) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{source}: line {line_number}: {name} must be an integer, got {value!r}"
+        ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +77,12 @@ class DictionaryEntry:
     surface: str
     pos: str
     cost: float
+    pos_detail: str = ""
+    conjugation: str = ""
+    left_id: int = -1
+    right_id: int = -1
+    source: str = ""
+    raw_cost: int | None = None
 
 
 
@@ -52,12 +107,12 @@ class Dictionary:
 
     @classmethod
     def from_tsv(cls, path: str | Path) -> "Dictionary":
-        """Load a strict ``reading<TAB>surface<TAB>pos<TAB>cost`` TSV file.
+        """Load a dictionary TSV with four required and optional columns.
 
         Errors name both the source path and physical line, so malformed data
         is straightforward to fix rather than silently producing an empty index.
-        Blank lines are ignored; all non-blank records must have exactly four
-        fields and the header must be the required four columns in that order.
+        Blank lines are ignored.  The first four header columns are required in
+        fixed order; known optional columns may follow in any order.
         """
 
         source = Path(path)
@@ -78,10 +133,16 @@ class Dictionary:
                 raise ValueError(f"{source}: line 1: malformed TSV header: {exc}") from exc
             if header:
                 header[0] = header[0].removeprefix("\ufeff")
-            if tuple(header) != _REQUIRED_COLUMNS:
+            if tuple(header[: len(_REQUIRED_COLUMNS)]) != _REQUIRED_COLUMNS:
                 expected = "\\t".join(_REQUIRED_COLUMNS)
                 actual = "\\t".join(header)
-                raise ValueError(f"{source}: line 1: expected header {expected!r}, got {actual!r}")
+                raise ValueError(f"{source}: line 1: expected header starting with {expected!r}, got {actual!r}")
+            optional_header = header[len(_REQUIRED_COLUMNS) :]
+            if len(set(header)) != len(header):
+                raise ValueError(f"{source}: line 1: duplicate TSV column name")
+            unknown = [name for name in optional_header if name not in _OPTIONAL_COLUMN_SET]
+            if unknown:
+                raise ValueError(f"{source}: line 1: unknown TSV column {unknown[0]!r}")
 
             while True:
                 try:
@@ -93,11 +154,17 @@ class Dictionary:
                 line_number = reader.line_num
                 if not row:
                     continue
-                if len(row) != len(_REQUIRED_COLUMNS):
+                if len(row) != len(header):
                     raise ValueError(
-                        f"{source}: line {line_number}: expected 4 tab-separated fields, got {len(row)}"
+                        f"{source}: line {line_number}: expected {len(header)} tab-separated fields, got {len(row)}"
                     )
-                reading, surface, pos, raw_cost = row
+                fields = dict(zip(header, row, strict=True))
+                reading, surface, pos, raw_cost = (
+                    fields["reading"],
+                    fields["surface"],
+                    fields["pos"],
+                    fields["cost"],
+                )
                 if not is_hiragana(reading):
                     raise ValueError(
                         f"{source}: line {line_number}: reading must be non-empty hiragana (ー allowed): {reading!r}"
@@ -116,12 +183,28 @@ class Dictionary:
                     raise ValueError(
                         f"{source}: line {line_number}: cost must be a finite non-negative number, got {raw_cost!r}"
                     )
+                pos_detail = fields.get("pos_detail", "")
+                conjugation = fields.get("conjugation", "")
+                left_id = _parse_non_negative_int(fields.get("left_id"), "left_id", source, line_number, default=-1)
+                right_id = _parse_non_negative_int(fields.get("right_id"), "right_id", source, line_number, default=-1)
+                entry_source = fields.get("source", "")
+                if entry_source and entry_source not in _SOURCES:
+                    raise ValueError(
+                        f"{source}: line {line_number}: source must be one of {sorted(_SOURCES)!r}, got {entry_source!r}"
+                    )
+                raw_cost_value = _parse_optional_int(fields.get("raw_cost"), "raw_cost", source, line_number)
                 entries.append(
                     DictionaryEntry(
                         sys.intern(reading),
                         sys.intern(surface),
                         sys.intern(pos),
                         cost,
+                        sys.intern(pos_detail),
+                        sys.intern(conjugation),
+                        left_id,
+                        right_id,
+                        sys.intern(entry_source),
+                        raw_cost_value,
                     )
                 )
 

@@ -44,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--raw-cost-ceiling", type=int, default=DEFAULT_RAW_COST_CEILING)
     parser.add_argument("--beme-cost-floor", type=float, default=DEFAULT_BEME_COST_FLOOR)
     parser.add_argument("--beme-cost-ceiling", type=float, default=DEFAULT_BEME_COST_CEILING)
+    parser.add_argument("--schema", choices=("v1", "v2"), default="v1")
     parser.add_argument(
         "--expect-sha256",
         help="reject an archive whose SHA-256 differs (recommended for reproducible builds)",
@@ -72,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         raw_ceiling=args.raw_cost_ceiling,
         beme_floor=args.beme_cost_floor,
         beme_ceiling=args.beme_cost_ceiling,
+        schema=args.schema,
     )
     payload = {
         "source": str(args.source),

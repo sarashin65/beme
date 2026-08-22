@@ -9,6 +9,7 @@ from pathlib import Path
 from .dictionary import Dictionary, is_hiragana
 from .lattice import Lattice, Token, build_lattice, k_best_viterbi
 from .reranker import ConversionContext, Reranker
+from .scorer import Scorer
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +89,7 @@ class Converter:
         beam_width: int = 64,
         reranker: Reranker | None = None,
         rerank_k: int | None = None,
+        scorer: Scorer | None = None,
     ) -> None:
         if not isinstance(dictionary, Dictionary):
             raise TypeError("dictionary must be a Dictionary")
@@ -101,6 +103,7 @@ class Converter:
         self.beam_width = beam_width
         self.reranker = reranker
         self.rerank_k = rerank_k
+        self.scorer = scorer
 
     @classmethod
     def from_tsv(
@@ -109,6 +112,7 @@ class Converter:
         beam_width: int = 64,
         reranker: Reranker | None = None,
         rerank_k: int | None = None,
+        scorer: Scorer | None = None,
     ) -> "Converter":
         """Load a strict TSV dictionary and create a converter."""
 
@@ -117,6 +121,7 @@ class Converter:
             beam_width=beam_width,
             reranker=reranker,
             rerank_k=rerank_k,
+            scorer=scorer,
         )
 
     def build_lattice(self, reading: str) -> Lattice:
@@ -151,7 +156,7 @@ class Converter:
             raise ValueError("reading must be non-empty hiragana (ー allowed)")
 
         lattice = self.build_lattice(reading)
-        paths = k_best_viterbi(lattice, beam_width=self.beam_width)
+        paths = k_best_viterbi(lattice, beam_width=self.beam_width, scorer=self.scorer)
 
         # Terminal paths are already ordered by cost and deterministic tie
         # keys.  Keep the first path for each surface, which is its minimum

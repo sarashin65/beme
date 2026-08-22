@@ -85,6 +85,23 @@ def test_json_cli_is_machine_readable_and_honors_top_k(tmp_path: Path) -> None:
     assert isinstance(payload["needs_rerank"], bool)
 
 
+def test_cli_accepts_decomposed_weights() -> None:
+    root = Path(__file__).resolve().parents[1]
+    process = run_cli(
+        root,
+        "convert",
+        "きしゃ",
+        "--weights",
+        str(root / "data/weights/decomposed_v1.json"),
+        "--top-k",
+        "1",
+        "--json",
+    )
+
+    assert process.returncode == 0, process.stderr
+    assert json.loads(process.stdout)["reading"] == "きしゃ"
+
+
 def test_cli_context_options_rerank_and_are_reported_in_json(tmp_path: Path) -> None:
     dictionary = str(write_dictionary(tmp_path))
     history = run_cli(

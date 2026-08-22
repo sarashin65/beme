@@ -11,6 +11,22 @@
 - 生成物 SHA-256: `efcdf5a1baeaeb74f8ca6c85552d6fac335d40ad274f1e77181c21c8f37f617b`
 - ライセンス: NAIST / ICOT の IPADIC ライセンス。著作権表示、再配布条件、無保証条項の全文は `licenses/IPADIC.txt`
 
+### v2 辞書（Task 3）
+
+追加属性を保持する `data/dictionary_v2.tsv` は次のコマンドで生成します（原典の SHA-256 を検証します）。
+
+```sh
+uv run python scripts/build_ipadic_dictionary.py \
+  mecab-ipadic_2.7.0-20070801+main.orig.tar.gz \
+  --schema v2 --output data/dictionary_v2.tsv \
+  --expect-sha256 b62f527d881c504576baed9c6ef6561554658b175ce6ae0096a60307e49e3523
+```
+
+列は必須 4 列（`reading`, `surface`, `pos`, `cost`）に、`pos_detail`, `conjugation`, `left_id`, `right_id`, `source`, `raw_cost` を加えた 10 列です。`pos_detail` は IPADIC の 品詞(4)/細分類1(5)/細分類2(6)/細分類3(7)、`conjugation` は 活用型(8)/活用形(9) を `*` を除いて `/` で連結したものです。IPADIC の重複キーは最小コストの行を採用し、その採用行の属性も採用します。IPADIC 由来の `source` は `ipadic`、overlay 上書きは `overlay` です。
+
+- 生成物: 349,043 エントリ、33,428,366 bytes
+- 生成物 SHA-256: `1e423c314cb6ee117cb429cb7a9a063a199f4c3e80d9f95ffcb584f855566e0a`
+
 WSL2 では root 権限を必要とする apt の代わりに、開発依存 `mecab-python3>=1.0.10` と `ipadic>=1.0.0` をプロジェクトの `.venv` に導入します。実測環境では MeCab `0.996`、`mecab-python3 1.0.12`、`ipadic 1.0.0` を使用しました。`mecab-python3` / MeCab は BSD・LGPL・GPL の選択ライセンスで配布される変換ツールで、生成 TSV にそのコードは含まれません。生成スクリプトは全語彙を列挙できないコンパイル済み `sys.dic` ではなく、固定した原典 CSV を直接読みます。
 
 再生成手順:

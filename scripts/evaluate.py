@@ -18,6 +18,9 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from beme.converter import Converter  # noqa: E402
+from beme.features import decomposed_v1_extractor, legacy_v1_extractor  # noqa: E402
+from beme.scorer import LinearScorer  # noqa: E402
+from beme.weights import DEFAULT_WEIGHTS_PATH, Weights  # noqa: E402
 from beme.benchmark import (  # noqa: E402
     evaluate_ajimee,
     evaluate_mozc,
@@ -78,6 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="handmade",
     )
     parser.add_argument("--dictionary", type=Path, default=DEFAULT_DICTIONARY)
+    parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS_PATH)
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
     parser.add_argument("--ajimee-cases", type=Path, default=DEFAULT_AJIMEE_CASES)
     parser.add_argument("--mozc-cases", type=Path, default=DEFAULT_MOZC_CASES)
@@ -252,11 +256,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         reranker, effective_reranker = _load_reranker(args)
         measured_reranker = _MeasuredReranker(reranker)
+        with args.weights.open(encoding="utf-8") as stream:
+            weight_spec = json.load(stream).get("feature_spec", "legacy_v1")
+        weights = Weights.load(args.weights, feature_spec=weight_spec)
+        extractor = (
+            decomposed_v1_extractor() if weights.feature_spec == "decomposed_v1"
+            else legacy_v1_extractor()
+        )
         converter = Converter.from_tsv(
             args.dictionary,
             beam_width=args.beam_width,
             reranker=measured_reranker,
             rerank_k=args.rerank_k,
+            scorer=LinearScorer(extractor, weights),
         )
         reports: dict[str, dict[str, object]] = {}
         if args.suite in {"handmade", "all"}:
