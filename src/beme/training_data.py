@@ -57,7 +57,7 @@ class TrainingExample:
     context_truncated: bool | None = None
     contrast_pair_id: str | None = None
     gold_index: int | None = None
-    span_tokens: tuple[Any, ...] = ()
+    span_tokens: int | None = None
     split: str | None = None
 
 
@@ -131,9 +131,11 @@ def _parse_example(value: Any) -> TrainingExample:
     if "context_truncated" in value and type(context_truncated) is not bool:
         raise ValueError("context_truncated must be a boolean")
 
-    span_tokens = value.get("span_tokens", [])
-    if not isinstance(span_tokens, list):
-        raise ValueError("span_tokens must be an array")
+    span_tokens = value.get("span_tokens")
+    if "span_tokens" in value and (
+        type(span_tokens) is not int or span_tokens < 1
+    ):
+        raise ValueError("span_tokens must be an integer greater than zero")
     split = value.get("split")
     if "split" in value and (not isinstance(split, str) or split not in _SPLIT_NAMES):
         raise ValueError("split must be one of train, dev, or test")
@@ -171,7 +173,7 @@ def _parse_example(value: Any) -> TrainingExample:
         context_truncated=context_truncated,
         contrast_pair_id=_optional_nullable_string(value, "contrast_pair_id"),
         gold_index=gold_index,
-        span_tokens=tuple(span_tokens),
+        span_tokens=span_tokens,
         split=split,
     )
 
@@ -250,7 +252,15 @@ def build_manifest(
                 example.article_sha256 is not None for example in examples
             ),
             "span_tokens_present_count": sum(
-                bool(example.span_tokens) for example in examples
+                example.span_tokens is not None for example in examples
+            ),
+            "span_tokens_min": min(
+                (example.span_tokens for example in examples if example.span_tokens is not None),
+                default=None,
+            ),
+            "span_tokens_max": max(
+                (example.span_tokens for example in examples if example.span_tokens is not None),
+                default=None,
             ),
             "split_field_verified": bool(examples) and all(
                 example.split is not None and example.split == name for example in examples

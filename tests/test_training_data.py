@@ -93,7 +93,7 @@ def test_all_d1_fields_load_and_positive_is_canonical(tmp_path: Path) -> None:
         '"left_context":"前","reading":"かな","right_context":"後",'
         '"positive":"仮名","candidates":["仮名","佳名"],"viterbi_costs":[1.0,2.0],'
         '"frequency_bucket":{"positive":"mid"},"context_truncated":false,'
-        '"contrast_pair_id":"pair-1","gold_index":0,"span_tokens":["名詞"],"split":"train"}\n',
+        '"contrast_pair_id":"pair-1","gold_index":0,"span_tokens":1,"split":"train"}\n',
     )
     example = load_jsonl(path)[0]
     assert example.target_surface == "仮名"
@@ -101,7 +101,7 @@ def test_all_d1_fields_load_and_positive_is_canonical(tmp_path: Path) -> None:
     assert example.context_truncated is False
     assert example.contrast_pair_id == "pair-1"
     assert example.gold_index == 0
-    assert example.span_tokens == ("名詞",)
+    assert example.span_tokens == 1
     assert example.split == "train"
 
 
@@ -158,9 +158,11 @@ def test_gold_index_must_point_at_positive(tmp_path: Path) -> None:
         load_jsonl(write_jsonl(tmp_path, text))
 
 
-def test_span_tokens_must_be_an_array(tmp_path: Path) -> None:
+@pytest.mark.parametrize("value", [0, -1, True, 1.0, "1", []])
+def test_span_tokens_must_be_positive_int(tmp_path: Path, value: object) -> None:
+    text = json.dumps({"reading": "か", "positive": "可", "span_tokens": value}) + "\n"
     with pytest.raises(ValueError, match=r"line 1.*span_tokens"):
-        load_jsonl(write_jsonl(tmp_path, '{"reading":"か","positive":"可","span_tokens":"名詞"}\n'))
+        load_jsonl(write_jsonl(tmp_path, text))
 
 
 def test_split_value_and_destination_must_match(tmp_path: Path) -> None:
@@ -183,3 +185,18 @@ def test_manifest_new_fields_are_deterministic(tmp_path: Path) -> None:
     assert first == second
     assert first["split_field_verified"] is False
     assert first["splits"]["train"]["article_sha256_present_count"] == 0
+    assert first["splits"]["train"]["span_tokens_min"] is None
+    assert first["splits"]["train"]["span_tokens_max"] is None
+
+
+def test_manifest_records_span_token_min_and_max(tmp_path: Path) -> None:
+    paths = {}
+    for name, value in (("train", 1), ("dev", 3), ("test", 2)):
+        paths[name] = write_jsonl(
+            tmp_path,
+            json.dumps({"reading": "か", "positive": "可", "span_tokens": value}) + "\n",
+            f"{name}.jsonl",
+        )
+    manifest = load_splits(paths)[1]
+    assert manifest["splits"]["train"]["span_tokens_min"] == 1
+    assert manifest["splits"]["train"]["span_tokens_max"] == 1
