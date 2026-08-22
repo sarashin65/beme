@@ -112,9 +112,26 @@ class FeatureExtractor:
             elif token.pos == "literal":
                 features["lex.literal"] = 1.0
             elif token.raw_cost is not None:
-                from .ipadic import map_ipadic_cost
-                features["lex.ipadic_cost_mapped"] = map_ipadic_cost(token.raw_cost)
-                if any("ァ" <= char <= "ヺ" for char in normalized_surface):
+                # Do not recompute the IPADIC cost mapping here: it would
+                # silently ignore whatever --raw-cost-floor/--raw-cost-ceiling/
+                # --beme-cost-floor/--beme-cost-ceiling the dictionary was
+                # actually built with (scripts/build_ipadic_dictionary.py),
+                # and any later scripts/apply_cost_learning.py adjustment
+                # (issue #9 Phase 1 review, M4). token.cost is the one place
+                # those parameters and adjustments actually land, so derive
+                # the mapped-cost feature from it instead. It only needs
+                # subtracting back out the katakana-surface penalty that the
+                # same build step folded in, so the two decomposed features
+                # stay orthogonal and reconstruction stays exact. Use the
+                # dictionary build's own katakana predicate (issue #9 Phase 1
+                # review, L3) rather than a narrower ad-hoc range check.
+                from .ipadic import KATAKANA_SURFACE_COST_PENALTY, contains_katakana_surface
+
+                is_katakana_surface = contains_katakana_surface(token.surface)
+                features["lex.ipadic_cost_mapped"] = token.cost - (
+                    KATAKANA_SURFACE_COST_PENALTY if is_katakana_surface else 0.0
+                )
+                if is_katakana_surface:
                     features["lex.katakana_surface"] = 1.0
             else:
                 # v1 dictionaries and hand-written overlays have no raw IPADIC cost.

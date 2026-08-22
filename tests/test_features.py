@@ -64,6 +64,62 @@ def test_decomposed_features_include_declared_lexical_signals() -> None:
     assert ipadic_features["lex.script.kanji"] == 1.0
 
 
+def test_decomposed_ipadic_cost_mapped_honors_non_default_build_params() -> None:
+    """Regression for issue #9 Phase 1 review M4.
+
+    The decomposed extractor used to recompute
+    ``map_ipadic_cost(token.raw_cost)`` with the module's default
+    floor/ceiling constants, ignoring whatever
+    --raw-cost-floor/--raw-cost-ceiling/--beme-cost-floor/--beme-cost-ceiling
+    scripts/build_ipadic_dictionary.py actually built the dictionary with (or
+    any later scripts/apply_cost_learning.py adjustment). Craft a token whose
+    stored cost is what a non-default --beme-cost-floor would have produced,
+    and check the decomposed features reconstruct that stored cost exactly
+    rather than the default-parameter cost.
+    """
+    from beme.ipadic import map_ipadic_cost
+
+    raw_cost = 5000
+    custom_cost = map_ipadic_cost(raw_cost, beme_floor=1.0, beme_ceiling=9.0)
+    default_cost = map_ipadic_cost(raw_cost)
+    assert custom_cost != default_cost  # sanity: the two parameterizations disagree
+
+    token = Token("きしゃ", "汽車", "noun", custom_cost, raw_cost=raw_cost, source="ipadic")
+    edge = LatticeEdge(0, 3, token)
+    extractor = decomposed_v1_extractor()
+
+    features = extractor.lexical_features(edge)
+    assert "lex.katakana_surface" not in features
+    assert features["lex.ipadic_cost_mapped"] == pytest.approx(custom_cost)
+    assert features["lex.ipadic_cost_mapped"] != pytest.approx(default_cost)
+
+
+def test_decomposed_katakana_surface_matches_ipadic_build_predicate() -> None:
+    """Regression for issue #9 Phase 1 review L3.
+
+    The old inline check (``"ァ" <= char <= "ヺ"``, U+30A1-U+30FA only)
+    missed the ranges ``ipadic.contains_katakana_surface`` also treats as
+    katakana at dictionary build time (U+30FD-U+30FF, U+31F0-U+31FF). A
+    surface in one of those ranges carries KATAKANA_SURFACE_COST_PENALTY in
+    its token.cost, so failing to fire lex.katakana_surface for it would
+    break the decomposed reconstruction.
+    """
+    from beme.ipadic import KATAKANA_SURFACE_COST_PENALTY, map_ipadic_cost
+
+    raw_cost = 5000
+    mapped = map_ipadic_cost(raw_cost)
+    surface = "ヽ"  # katakana iteration mark: outside U+30A1-U+30FA
+    token = Token(
+        "あ", surface, "noun", mapped + KATAKANA_SURFACE_COST_PENALTY, raw_cost=raw_cost, source="ipadic",
+    )
+    edge = LatticeEdge(0, 1, token)
+    extractor = decomposed_v1_extractor()
+
+    features = extractor.lexical_features(edge)
+    assert features["lex.katakana_surface"] == 1.0
+    assert features["lex.ipadic_cost_mapped"] == pytest.approx(mapped)
+
+
 def test_feature_json_round_trip(tmp_path: Path) -> None:
     document = {"features": {"lex.base_cost": 0.8, "trans.bos": 1.0}, "rank": 0}
     path = tmp_path / "features.jsonl"

@@ -56,8 +56,15 @@ def katakana_to_hiragana(value: str) -> str:
     )
 
 
-def _contains_katakana(surface: str) -> bool:
-    """Return whether *surface* contains a full- or half-width katakana letter."""
+def contains_katakana_surface(surface: str) -> bool:
+    """Return whether *surface* contains a full- or half-width katakana letter.
+
+    Shared with ``FeatureExtractor.lexical_features`` (see issue #9 Phase 1
+    review, L3) so the decomposed scorer's ``lex.katakana_surface`` feature
+    fires on exactly the surfaces this module penalizes at build time,
+    including the U+30FD-30FF and U+31F0-31FF ranges a narrower ASCII-range
+    check would miss.
+    """
 
     normalized = unicodedata.normalize("NFKC", surface)
     return any(
@@ -200,7 +207,7 @@ def _load_imported_entries(
             beme_floor=beme_floor,
             beme_ceiling=beme_ceiling,
         )
-        if _contains_katakana(surface):
+        if contains_katakana_surface(surface):
             cost += KATAKANA_SURFACE_COST_PENALTY
         key = (reading, surface, pos)
         previous = entries.get(key)
@@ -321,8 +328,10 @@ __all__ = [
     "DEFAULT_BEME_COST_FLOOR",
     "DEFAULT_RAW_COST_CEILING",
     "DEFAULT_RAW_COST_FLOOR",
+    "KATAKANA_SURFACE_COST_PENALTY",
     "DictionaryBuildStats",
     "build_dictionary",
+    "contains_katakana_surface",
     "katakana_to_hiragana",
     "map_ipadic_cost",
     "map_ipadic_pos",
