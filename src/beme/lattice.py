@@ -6,12 +6,22 @@ import math
 import heapq
 from itertools import count
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Hashable
 
 from .dictionary import Dictionary, DictionaryEntry, is_hiragana
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from .scorer import Scorer
+
+
+def _resolve_scorer(scorer: Scorer | None) -> Scorer:
+    if scorer is not None:
+        return scorer
+    # Keep the import lazy: scorer implementations use lattice data classes.
+    from .scorer import default_scorer
+
+    return default_scorer()
 
 
 UNKNOWN_COST = 8.0
@@ -65,6 +75,7 @@ class LatticePath:
     cost: float
     token: Token | None = None
     parent: "LatticePath | None" = None
+    state: Hashable | None = None
 
     @property
     def tokens(self) -> tuple[Token, ...]:
@@ -113,20 +124,22 @@ class Lattice:
             allow_literals=allow_literals,
         )
 
-    def k_best(self, beam_width: int = 64) -> tuple[LatticePath, ...]:
-        return k_best_viterbi(self, beam_width=beam_width)
+    def k_best(self, beam_width: int = 64, scorer: Scorer | None = None) -> tuple[LatticePath, ...]:
+        return k_best_viterbi(self, beam_width=beam_width, scorer=scorer)
 
-    def paths_at(self, position: int, beam_width: int = 64) -> tuple[LatticePath, ...]:
+    def paths_at(
+        self, position: int, beam_width: int = 64, scorer: Scorer | None = None
+    ) -> tuple[LatticePath, ...]:
         """Return the retained paths ending at a node (useful for inspection)."""
 
         if not 0 <= position < len(self.nodes):
             raise IndexError(f"lattice position out of range: {position}")
-        return _paths_by_node(self, beam_width)[position]
+        return _paths_by_node(self, beam_width, scorer)[position]
 
-    def backward_costs(self) -> tuple[float, ...]:
+    def backward_costs(self, scorer: Scorer | None = None) -> tuple[float, ...]:
         """Return the minimum cost from each position to the terminal node."""
 
-        return backward_viterbi(self)
+        return backward_viterbi(self, scorer=scorer)
 
 
 def _edge_key(edge: LatticeEdge) -> tuple[int, float, str, str, str]:
@@ -201,25 +214,15 @@ def build_lattice(
     return Lattice(reading, tuple(nodes))
 
 
-# The transition table is deliberately tiny: Phase 1 has no learned model.
-# Values are additive costs and stay small relative to lexical costs.  The
-# default discourages implausible boundaries while leaving unknown fallback
-# paths viable.
-_TRANSITION_COSTS: dict[tuple[str, str], float] = {
-    ("noun", "particle"): 0.05,
-    ("proper_noun", "particle"): 0.05,
-    ("pronoun", "particle"): 0.05,
-    ("particle", "noun"): 0.03,
-    ("particle", "proper_noun"): 0.03,
-    ("particle", "verb"): 0.04,
-    ("particle", "adjective"): 0.04,
-    ("verb", "particle"): 0.05,
-    ("adjective", "auxiliary"): 0.03,
-    ("verb", "auxiliary"): 0.03,
-    ("unknown", "unknown"): 0.20,
-    ("unknown", "particle"): 0.10,
-    ("particle", "unknown"): 0.10,
-}
+# Compatibility view for callers of the old public helper.  The values live
+# in the legacy scorer; this mapping deliberately contains no second table.
+from .scorer import legacy_v1_weights
+
+_TRANSITION_COSTS: dict[tuple[str, str], float] = {}
+for _name, _value in legacy_v1_weights().items():
+    if _name.startswith("trans.pair."):
+        _previous, _current = _name.removeprefix("trans.pair.").split(">", 1)
+        _TRANSITION_COSTS[(_previous, _current)] = _value
 
 
 def pos_transition_cost(previous_pos: str | None, current_pos: str) -> float:
@@ -239,7 +242,7 @@ def pos_transition_cost(previous_pos: str | None, current_pos: str) -> float:
     return 0.12
 
 
-def backward_viterbi(lattice: Lattice) -> tuple[float, ...]:
+def backward_viterbi(lattice: Lattice, scorer: Scorer | None = None) -> tuple[float, ...]:
     """Compute minimum remaining path costs with a backward dynamic program.
 
     The returned value at a position treats the first edge leaving that
@@ -249,6 +252,7 @@ def backward_viterbi(lattice: Lattice) -> tuple[float, ...]:
     Unconnected positions have an infinite remaining cost.
     """
 
+    scorer = _resolve_scorer(scorer)
     terminal = len(lattice.nodes) - 1
     if terminal < 0:
         return tuple()
@@ -268,26 +272,80 @@ def backward_viterbi(lattice: Lattice) -> tuple[float, ...]:
                 next_costs = continuation[edge.end]
                 after_edge = min(
                     (
-                        next_edge.token.cost
-                        + pos_transition_cost(edge.token.pos, next_edge.token.pos)
-                        + next_costs[next_edge.token.pos]
+                        scorer.edge_cost(next_edge)
+                        + scorer.transition_cost(scorer.state_key(edge), next_edge)
+                        + next_costs[scorer.state_key(next_edge)]
                     )
                     for next_edge in lattice.nodes[edge.end].edges
                 ) if next_costs else math.inf
 
-            edge_cost = edge.token.cost + after_edge
+            edge_cost = scorer.edge_cost(edge) + after_edge
             if edge_cost < best_from_node:
                 best_from_node = edge_cost
 
             # Store only the cost after this edge.  A predecessor adds this
             # edge's token cost and transition cost itself.
-            continuation[node.position][edge.token.pos] = min(
-                continuation[node.position].get(edge.token.pos, math.inf),
+            state = scorer.state_key(edge)
+            continuation[node.position][state] = min(
+                continuation[node.position].get(state, math.inf),
                 after_edge,
             )
         node_costs[node.position] = best_from_node
 
     return tuple(node_costs)
+
+
+def backward_costs_by_state(
+    lattice: Lattice,
+    scorer: Scorer,
+    *,
+    states: Sequence[Hashable] | None = None,
+) -> tuple[dict[Hashable | None, float], ...]:
+    """Compute exact remaining costs indexed by the scorer's continuation state.
+
+    A transition scorer may depend on the previous edge only through
+    ``state_key``.  Keeping the state domain to states entering each position
+    keeps this DP bounded when a future scorer has a larger state vocabulary.
+    """
+
+    terminal = len(lattice.nodes) - 1
+    if terminal < 0:
+        return tuple()
+
+    if states is None:
+        domains: list[set[Hashable | None]] = [set() for _ in lattice.nodes]
+        domains[0] = {None}
+        for node in lattice.nodes:
+            for edge in node.edges:
+                domains[edge.end].add(scorer.state_key(edge))
+    else:
+        all_states = set(states)
+        domains = [set(all_states) for _ in lattice.nodes]
+        domains[0] = {None}
+
+    remaining: list[dict[Hashable | None, float]] = [
+        {state: math.inf for state in domain} for domain in domains
+    ]
+    for state in domains[terminal]:
+        remaining[terminal][state] = 0.0
+
+    for position in range(terminal - 1, -1, -1):
+        for previous in domains[position]:
+            best = math.inf
+            for edge in lattice.nodes[position].edges:
+                edge_state = scorer.state_key(edge)
+                after_edge = remaining[edge.end].get(edge_state, math.inf)
+                if math.isinf(after_edge):
+                    continue
+                best = min(
+                    best,
+                    scorer.transition_cost(previous, edge)
+                    + scorer.edge_cost(edge)
+                    + after_edge,
+                )
+            remaining[position][previous] = best
+
+    return tuple(remaining)
 
 
 def backward_costs_by_pos(lattice: Lattice) -> tuple[dict[str | None, float], ...]:
@@ -299,35 +357,10 @@ def backward_costs_by_pos(lattice: Lattice) -> tuple[dict[str | None, float], ..
     transition costs cannot be represented by a position-only heuristic.
     """
 
-    terminal = len(lattice.nodes) - 1
-    if terminal < 0:
-        return tuple()
-
-    positions: set[str | None] = {None}
-    for node in lattice.nodes:
-        positions.update(edge.token.pos for edge in node.edges)
-
-    remaining: list[dict[str | None, float]] = [{} for _ in lattice.nodes]
-    for previous_pos in positions:
-        remaining[terminal][previous_pos] = 0.0
-
-    for position in range(terminal - 1, -1, -1):
-        current = remaining[position]
-        for previous_pos in positions:
-            best = math.inf
-            for edge in lattice.nodes[position].edges:
-                after_edge = remaining[edge.end].get(edge.token.pos, math.inf)
-                if math.isinf(after_edge):
-                    continue
-                best = min(
-                    best,
-                    pos_transition_cost(previous_pos, edge.token.pos)
-                    + edge.token.cost
-                    + after_edge,
-                )
-            current[previous_pos] = best
-
-    return tuple(remaining)
+    scorer = _resolve_scorer(None)
+    positions = {None}
+    positions.update(scorer.state_key(edge) for edge in lattice.edges)
+    return backward_costs_by_state(lattice, scorer, states=positions)
 
 
 backward_costs = backward_viterbi
@@ -342,9 +375,12 @@ def _path_key(path: LatticePath) -> tuple[float, str, tuple[tuple[str, str, str,
     )
 
 
-def _paths_by_node(lattice: Lattice, beam_width: int) -> tuple[tuple[LatticePath, ...], ...]:
+def _paths_by_node(
+    lattice: Lattice, beam_width: int, scorer: Scorer | None = None
+) -> tuple[tuple[LatticePath, ...], ...]:
     if not isinstance(beam_width, int) or isinstance(beam_width, bool) or beam_width <= 0:
         raise ValueError("beam_width must be a positive integer")
+    scorer = _resolve_scorer(scorer)
     paths: list[list[LatticePath]] = [[] for _ in lattice.nodes]
     paths[0] = [LatticePath(0.0)]
     for node in lattice.nodes:
@@ -353,16 +389,18 @@ def _paths_by_node(lattice: Lattice, beam_width: int) -> tuple[tuple[LatticePath
         for edge in node.edges:
             destination = paths[edge.end]
             for previous in paths[node.position]:
-                previous_pos = previous.token.pos if previous.token is not None else None
-                total = previous.cost + edge.token.cost + pos_transition_cost(previous_pos, edge.token.pos)
-                destination.append(LatticePath(total, edge.token, previous))
+                previous_state = previous.state
+                total = previous.cost + scorer.edge_cost(edge) + scorer.transition_cost(previous_state, edge)
+                destination.append(LatticePath(total, edge.token, previous, scorer.state_key(edge)))
             destination.sort(key=_path_key)
             if len(destination) > beam_width:
                 del destination[beam_width:]
     return tuple(tuple(sorted(node_paths, key=_path_key)) for node_paths in paths)
 
 
-def k_best_viterbi(lattice: Lattice, beam_width: int = 64) -> tuple[LatticePath, ...]:
+def k_best_viterbi(
+    lattice: Lattice, beam_width: int = 64, scorer: Scorer | None = None
+) -> tuple[LatticePath, ...]:
     """Return up to ``beam_width`` terminal paths in exact cost order.
 
     ``beam_width`` is retained as the public argument name for compatibility,
@@ -375,7 +413,8 @@ def k_best_viterbi(lattice: Lattice, beam_width: int = 64) -> tuple[LatticePath,
     if not isinstance(beam_width, int) or isinstance(beam_width, bool) or beam_width <= 0:
         raise ValueError("beam_width must be a positive integer")
 
-    remaining = backward_costs_by_pos(lattice)
+    scorer = _resolve_scorer(scorer)
+    remaining = backward_costs_by_state(lattice, scorer)
     if not remaining or math.isinf(remaining[0].get(None, math.inf)):
         return tuple()
 
@@ -401,13 +440,14 @@ def k_best_viterbi(lattice: Lattice, beam_width: int = 64) -> tuple[LatticePath,
             results.append(path)
             continue
 
-        previous_pos = path.token.pos if path.token is not None else None
+        previous_state = path.state
         for edge in lattice.nodes[position].edges:
-            after_edge = remaining[edge.end].get(edge.token.pos, math.inf)
+            edge_state = scorer.state_key(edge)
+            after_edge = remaining[edge.end].get(edge_state, math.inf)
             if math.isinf(after_edge):
                 continue
-            cost = path.cost + edge.token.cost + pos_transition_cost(previous_pos, edge.token.pos)
-            child = LatticePath(cost, edge.token, path)
+            cost = path.cost + scorer.edge_cost(edge) + scorer.transition_cost(previous_state, edge)
+            child = LatticePath(cost, edge.token, path, edge_state)
             heapq.heappush(
                 queue,
                 (
@@ -434,6 +474,7 @@ __all__ = [
     "build_lattice",
     "backward_costs",
     "backward_costs_by_pos",
+    "backward_costs_by_state",
     "backward_viterbi",
     "k_best_viterbi",
     "pos_transition_cost",
