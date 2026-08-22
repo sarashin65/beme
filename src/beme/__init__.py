@@ -11,6 +11,7 @@ from .lattice import (
     k_best_viterbi,
     pos_transition_cost,
 )
+from .oracle import constrained_best_path
 from .reranker import (
     ConversionContext,
     CrossEncoderReranker,
@@ -44,6 +45,7 @@ __all__ = [
     "Token",
     "__version__",
     "build_lattice",
+    "constrained_best_path",
     "k_best_viterbi",
     "load_tsv",
     "pos_transition_cost",
