@@ -21,11 +21,13 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     base = Weights.load(source, feature_spec="decomposed_v1")
     for spec_id in registered_spec_ids():
-        if not spec_id.startswith("decomposed_v1-"):
+        if not (spec_id.startswith("decomposed_v1-") or spec_id.startswith("decomposed_v1+")):
             continue
         spec = resolve_spec(spec_id)
         known = set(spec.lexical_features) | set(spec.transition_features)
         values = {name: value for name, value in base.values.items() if name in known}
+        if "trans.matrix_cost" in known:
+            values["trans.matrix_cost"] = 0.0
         Weights(values, base.default_weight, spec_id, base.metadata).dump(
             output_dir / f"{spec_id}.json"
         )

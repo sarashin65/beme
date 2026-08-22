@@ -30,7 +30,8 @@ def test_registry_contains_the_two_bases_and_six_ablations() -> None:
         "legacy_v1", "decomposed_v1", "decomposed_v1-lex_only",
         "decomposed_v1-trans_only", "decomposed_v1-no_ipadic_cost",
         "decomposed_v1-no_source", "decomposed_v1-no_katakana",
-        "decomposed_v1-no_shape",
+        "decomposed_v1-no_shape", "decomposed_v1+matrix_v1",
+        "decomposed_v1+matrix_v1-pos_pairs",
     )
 
 

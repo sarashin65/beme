@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Hashable
+from functools import lru_cache
+from typing import TYPE_CHECKING, Hashable, NamedTuple
 import unicodedata
 
 from .lattice import LatticeEdge
@@ -35,6 +36,7 @@ class FeatureSpec:
     lexical_features: tuple[str, ...] = ("lex.base_cost",)
     transition_features: tuple[str, ...] = ()
     family: str = "legacy_v1"
+    transition_state: tuple[str, ...] = ("pos",)
 
     @classmethod
     def legacy_v1(cls) -> "FeatureSpec":
@@ -153,18 +155,26 @@ class FeatureExtractor:
         if self.spec.family not in {"legacy_v1", "decomposed_v1"}:
             raise ValueError(f"unsupported feature specification: {self.spec.id!r}")
         current = edge.token.pos
+        previous_pos = previous.pos if isinstance(previous, TransitionState) else previous
         if previous is None:
             name = "trans.bos"
         else:
-            pair = (str(previous), current)
+            pair = (str(previous_pos), current)
             pair_name = f"trans.pair.{pair[0]}>{pair[1]}"
             if pair_name in self.spec.transition_features:
                 name = pair_name
-            elif previous == current:
+            elif previous_pos == current:
                 name = "trans.same_pos"
             else:
                 name = "trans.default"
-        return {name: 1.0} if name in self.spec.transition_features else {}
+        features = {name: 1.0} if name in self.spec.transition_features else {}
+        if "trans.matrix_cost" in self.spec.transition_features:
+            matrix = _matrix_table()
+            previous_right_id = 0 if previous is None else previous.right_id
+            matrix_value = matrix.lookup(previous_right_id, edge.token.left_id)
+            if matrix_value is not None:
+                features["trans.matrix_cost"] = matrix_value
+        return features
 
     def edge_features(self, edge: LatticeEdge) -> dict[str, float]:
         """Return the lexical features active on one edge."""
@@ -185,7 +195,37 @@ def _spec_without(base: FeatureSpec, spec_id: str, removed: set[str]) -> Feature
         tuple(name for name in base.lexical_features if name not in removed),
         tuple(name for name in base.transition_features if name not in removed),
         base.family,
+        base.transition_state,
     )
+
+
+class TransitionState(NamedTuple):
+    pos: str
+    right_id: int
+
+
+@lru_cache(maxsize=1)
+def _matrix_table():
+    from .matrix_cost import DEFAULT_MATRIX_PATH, MatrixCostTable
+
+    return MatrixCostTable.load(DEFAULT_MATRIX_PATH)
+
+
+MATRIX_V1_SPEC = FeatureSpec(
+    "decomposed_v1+matrix_v1",
+    DECOMPOSED_V1_SPEC.lexical_features,
+    (*DECOMPOSED_V1_SPEC.transition_features, "trans.matrix_cost"),
+    DECOMPOSED_V1_SPEC.family,
+    ("pos", "right_id"),
+)
+MATRIX_V1_POS_PAIRS_SPEC = FeatureSpec(
+    "decomposed_v1+matrix_v1-pos_pairs",
+    MATRIX_V1_SPEC.lexical_features,
+    tuple(name for name in MATRIX_V1_SPEC.transition_features
+          if not name.startswith("trans.pair.")),
+    MATRIX_V1_SPEC.family,
+    MATRIX_V1_SPEC.transition_state,
+)
 
 
 _ABLATION_REMOVALS = {
@@ -206,6 +246,8 @@ _SPEC_REGISTRY = {
         spec_id: _spec_without(DECOMPOSED_V1_SPEC, spec_id, removed)
         for spec_id, removed in _ABLATION_REMOVALS.items()
     },
+    MATRIX_V1_SPEC.id: MATRIX_V1_SPEC,
+    MATRIX_V1_POS_PAIRS_SPEC.id: MATRIX_V1_POS_PAIRS_SPEC,
 }
 
 
@@ -295,8 +337,10 @@ def extractor_state_key(extractor: FeatureExtractor, edge: LatticeEdge) -> Hasha
     # FeatureExtractor currently has the same state definition as LinearScorer.
     # Keeping this small adapter here avoids making path serialization depend on
     # a scorer instance.
-    if extractor.spec.family in {"legacy_v1", "decomposed_v1"}:
+    if extractor.spec.transition_state == ("pos",):
         return edge.token.pos
+    if extractor.spec.transition_state == ("pos", "right_id"):
+        return TransitionState(edge.token.pos, edge.token.right_id)
     raise ValueError(f"unsupported feature specification: {extractor.spec.id!r}")
 
 
@@ -317,6 +361,9 @@ __all__ = [
     "FeatureSpec",
     "LEGACY_V1_SPEC",
     "DECOMPOSED_V1_SPEC",
+    "MATRIX_V1_SPEC",
+    "MATRIX_V1_POS_PAIRS_SPEC",
+    "TransitionState",
     "decomposed_v1_extractor",
     "extractor_for",
     "feature_delta",
