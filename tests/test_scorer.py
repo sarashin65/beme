@@ -68,6 +68,23 @@ def test_scorer_caches_reuse_entries_across_positions_instead_of_growing_unbound
     assert len(scorer._transition_cache) == 1
 
 
+def test_default_scorer_is_cached_process_wide() -> None:
+    """Regression for issue #9 Phase 1 review L2.
+
+    default_scorer() used to build a brand-new LinearScorer -- reparsing
+    data/weights/legacy_v1.json through legacy_v1_weights() -- on every
+    call. Every Lattice.k_best/backward_costs call and every Converter built
+    without an explicit scorer goes through _resolve_scorer ->
+    default_scorer(), so that reparsing sat on the conversion hot path.
+    """
+    import beme.scorer as scorer_module
+
+    scorer_module._DEFAULT_SCORER = None  # isolate from whatever ran earlier
+    first = default_scorer()
+    second = default_scorer()
+    assert first is second
+
+
 def test_scorer_cache_memoization_does_not_change_computed_cost() -> None:
     """Memoization must be a pure optimization: a cache hit and a fresh
     computation for the same token must agree bit-for-bit."""

@@ -81,10 +81,29 @@ class LinearScorer:
         self._transition_cache.clear()
 
 
-def default_scorer() -> LinearScorer:
-    from .features import legacy_v1_extractor
+_DEFAULT_SCORER: LinearScorer | None = None
 
-    return LinearScorer(legacy_v1_extractor(), legacy_v1_weights())
+
+def default_scorer() -> LinearScorer:
+    """Return a process-wide cached LinearScorer for the frozen legacy weights.
+
+    Every Lattice.k_best/backward_costs call and every Converter built
+    without an explicit ``scorer`` goes through here (see
+    lattice._resolve_scorer). Rebuilding it per call meant opening and
+    parsing data/weights/legacy_v1.json on every single conversion -- file
+    I/O on the hot path (issue #9 Phase 1 review, L2). Caching it is safe:
+    nothing here mutates the returned scorer's weights (LinearScorer.invalidate
+    is opt-in and unused for this instance), and its per-token memoization
+    (see LinearScorer.__init__) is a pure function of the token, so sharing
+    the instance across calls cannot change any computed cost.
+    """
+
+    global _DEFAULT_SCORER
+    if _DEFAULT_SCORER is None:
+        from .features import legacy_v1_extractor
+
+        _DEFAULT_SCORER = LinearScorer(legacy_v1_extractor(), legacy_v1_weights())
+    return _DEFAULT_SCORER
 
 
 __all__ = ["LinearScorer", "Scorer", "Weights", "default_scorer", "legacy_v1_weights"]
