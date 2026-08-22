@@ -66,11 +66,20 @@ class Weights(Mapping[str, float]):
         cls,
         path: str | Path,
         *,
-        feature_spec: str = "legacy_v1",
+        feature_spec: str | None = "legacy_v1",
         strict: bool = True,
         dictionary_sha256: str | None = None,
     ) -> "Weights":
-        """Load and validate a versioned weights document."""
+        """Load and validate a versioned weights document.
+
+        ``feature_spec`` is the caller's expectation: if the file declares a
+        different one, loading fails. Pass ``None`` to accept whatever the
+        file declares instead (auto-detection) -- this is for callers such as
+        the CLI that dispatch on ``Weights.feature_spec`` after loading and
+        have no independent expectation to check the file against; comparing
+        it against the value just read back out of the same file would never
+        fire (issue #9 Phase 1 review, L1).
+        """
         source = Path(path)
         with source.open(encoding="utf-8") as stream:
             document = json.load(stream)
@@ -79,7 +88,11 @@ class Weights(Mapping[str, float]):
         if document.get("format") != WEIGHTS_FORMAT:
             raise ValueError(f"unsupported weights format: {document.get('format')!r}")
         actual_spec = document.get("feature_spec")
-        if actual_spec != feature_spec:
+        if feature_spec is None:
+            if not isinstance(actual_spec, str):
+                raise ValueError(f"weights file does not declare a feature_spec: {source}")
+            feature_spec = actual_spec
+        elif actual_spec != feature_spec:
             raise ValueError(
                 f"feature_spec mismatch: file has {actual_spec!r}, expected {feature_spec!r}"
             )

@@ -18,6 +18,14 @@ if TYPE_CHECKING:
 # over that while staying far below any real weight mismatch.
 _RESIDUAL_TOLERANCE = 1e-9
 
+# The surface-script family of features. Kept as one tuple so the feature
+# names declared by FeatureSpec.decomposed_v1() and the names emitted by
+# FeatureExtractor.lexical_features() cannot drift apart the way the single
+# glob string "lex.script.*" once did (see issue #9 Phase 1 review, M1):
+# Weights.load() only recognizes literal feature names, so any name it does
+# not see here it rejects outright.
+_SCRIPT_CATEGORIES = ("kanji", "hiragana", "katakana", "other")
+
 
 @dataclass(frozen=True, slots=True)
 class FeatureSpec:
@@ -59,7 +67,9 @@ class FeatureSpec:
             (
                 "lex.ipadic_cost_mapped", "lex.katakana_surface", "lex.source.overlay",
                 "lex.unknown", "lex.literal", "lex.base_cost", "lex.overlay_cost",
-                "lex.reading_len", "lex.surface_len", "lex.script.*", "lex.proper_noun",
+                "lex.reading_len", "lex.surface_len",
+                *(f"lex.script.{category}" for category in _SCRIPT_CATEGORIES),
+                "lex.proper_noun",
             ),
             LEGACY_V1_SPEC.transition_features if "LEGACY_V1_SPEC" in globals() else FeatureSpec.legacy_v1().transition_features,
         )
@@ -95,15 +105,33 @@ class FeatureExtractor:
                 script = "katakana"
             else:
                 script = "other"
+            assert script in _SCRIPT_CATEGORIES
             features[f"lex.script.{script}"] = 1.0
             if token.pos == "unknown":
                 features["lex.unknown"] = 1.0
             elif token.pos == "literal":
                 features["lex.literal"] = 1.0
             elif token.raw_cost is not None:
-                from .ipadic import map_ipadic_cost
-                features["lex.ipadic_cost_mapped"] = map_ipadic_cost(token.raw_cost)
-                if any("ァ" <= char <= "ヺ" for char in normalized_surface):
+                # Do not recompute the IPADIC cost mapping here: it would
+                # silently ignore whatever --raw-cost-floor/--raw-cost-ceiling/
+                # --beme-cost-floor/--beme-cost-ceiling the dictionary was
+                # actually built with (scripts/build_ipadic_dictionary.py),
+                # and any later scripts/apply_cost_learning.py adjustment
+                # (issue #9 Phase 1 review, M4). token.cost is the one place
+                # those parameters and adjustments actually land, so derive
+                # the mapped-cost feature from it instead. It only needs
+                # subtracting back out the katakana-surface penalty that the
+                # same build step folded in, so the two decomposed features
+                # stay orthogonal and reconstruction stays exact. Use the
+                # dictionary build's own katakana predicate (issue #9 Phase 1
+                # review, L3) rather than a narrower ad-hoc range check.
+                from .ipadic import KATAKANA_SURFACE_COST_PENALTY, contains_katakana_surface
+
+                is_katakana_surface = contains_katakana_surface(token.surface)
+                features["lex.ipadic_cost_mapped"] = token.cost - (
+                    KATAKANA_SURFACE_COST_PENALTY if is_katakana_surface else 0.0
+                )
+                if is_katakana_surface:
                     features["lex.katakana_surface"] = 1.0
             else:
                 # v1 dictionaries and hand-written overlays have no raw IPADIC cost.

@@ -155,6 +155,42 @@ def test_evaluation_script_emits_json_report(tmp_path: Path) -> None:
     assert report["mrr_at_k"] == pytest.approx(1.0)
 
 
+def test_evaluation_script_rejects_non_object_weights_json_without_traceback(tmp_path: Path) -> None:
+    """Regression for issue #9 Phase 1 review L1.
+
+    scripts/evaluate.py mirrored the CLI's self-referential --weights
+    pre-read (json.load(stream).get("feature_spec", ...)), which raised an
+    uncaught AttributeError for a top-level JSON array instead of the clean
+    "error: ..." message the surrounding except (OSError, ValueError,
+    TypeError) is meant to produce.
+    """
+    weights_path = tmp_path / "weights.json"
+    weights_path.write_text("[]", encoding="utf-8")
+    root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(root / "src"), env.get("PYTHONPATH", "")) if part
+    )
+
+    process = subprocess.run(
+        [
+            sys.executable,
+            str(root / "scripts" / "evaluate.py"),
+            "--weights",
+            str(weights_path),
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert process.returncode != 0
+    assert "traceback" not in process.stderr.lower()
+    assert "error" in (process.stderr + process.stdout).lower()
+
+
 def test_load_cases_rejects_malformed_or_nonpositive_judgments(tmp_path: Path) -> None:
     malformed = tmp_path / "malformed.jsonl"
     malformed.write_text("not-json\n", encoding="utf-8")

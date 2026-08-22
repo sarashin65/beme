@@ -256,9 +256,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         reranker, effective_reranker = _load_reranker(args)
         measured_reranker = _MeasuredReranker(reranker)
-        with args.weights.open(encoding="utf-8") as stream:
-            weight_spec = json.load(stream).get("feature_spec", "legacy_v1")
-        weights = Weights.load(args.weights, feature_spec=weight_spec)
+        # feature_spec=None: this script has no independent expectation, it
+        # dispatches on whatever the file declares (see Weights.load).
+        weights = Weights.load(args.weights, feature_spec=None)
         extractor = (
             decomposed_v1_extractor() if weights.feature_spec == "decomposed_v1"
             else legacy_v1_extractor()
