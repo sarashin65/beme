@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
 import hashlib
 import json
 import os
@@ -31,6 +30,12 @@ from beme.reranker import (  # noqa: E402
     DEFAULT_CROSS_ENCODER_CACHE_DIR,
     LLMLogitsReranker,
     MockContextReranker,
+)
+from beme.rerank_stats import (  # noqa: E402
+    gold_rank_histogram,
+    paired_table,
+    pair_level,
+    ranked_candidates_from_scores,
 )
 from beme.scorer import LinearScorer  # noqa: E402
 from beme.training_data import TrainingExample, load_jsonl  # noqa: E402
@@ -197,32 +202,6 @@ def _read_scores(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return provenance, records
 
 
-def top1_from_scores(
-    candidates: Sequence[dict[str, Any]],
-    viterbi_weight: float,
-    ce_weight: float = 1.0,
-    rerank_k: int | None = None,
-    *,
-    context_empty: bool = False,
-) -> list[dict[str, Any]]:
-    """Reproduce Converter's head-rerank and untouched-tail ordering."""
-
-    materialized = [dict(candidate) for candidate in candidates]
-    if not materialized or context_empty or all(candidate.get("relevance") is None for candidate in materialized):
-        return materialized
-    head = materialized if rerank_k is None else materialized[:rerank_k]
-    head = sorted(
-        head,
-        key=lambda candidate: (
-            viterbi_weight * float(candidate["cost"]) - ce_weight * float(candidate["relevance"]),
-            float(candidate["cost"]),
-            candidate["surface"],
-        ),
-    )
-    tail = [] if rerank_k is None else materialized[rerank_k:]
-    return head + tail
-
-
 def _rank(order: Sequence[dict[str, Any]], gold: str) -> int | str:
     for index, candidate in enumerate(order, 1):
         if candidate["surface"] == gold:
@@ -230,31 +209,19 @@ def _rank(order: Sequence[dict[str, Any]], gold: str) -> int | str:
     return "absent"
 
 
-def _rank_distribution(ranks: Iterable[int | str]) -> dict[str, int]:
-    counts = Counter(ranks)
-    return {str(index): counts.get(index, 0) for index in range(1, 21)} | {
-        ">20": sum(counts[index] for index in counts if isinstance(index, int) and index > 20),
-        "absent": counts.get("absent", 0),
-    }
-
-
 def _top1_stats(records: Sequence[dict[str, Any]], orders: dict[str, Sequence[dict[str, Any]]]) -> dict[str, Any]:
-    before_correct = []
-    after_correct = []
-    before_ranks: list[int | str] = []
-    after_ranks: list[int | str] = []
+    before_records = []
+    after_records = []
     changes: list[dict[str, Any]] = []
     for record in records:
         before = record["candidates"]
         after = orders[record["id"]]
         before_rank = _rank(before, record["gold"])
         after_rank = _rank(after, record["gold"])
-        before_ranks.append(before_rank)
-        after_ranks.append(after_rank)
         before_is_correct = before_rank == 1
         after_is_correct = after_rank == 1
-        before_correct.append(before_is_correct)
-        after_correct.append(after_is_correct)
+        before_records.append({"id": record["id"], "correct": before_is_correct})
+        after_records.append({"id": record["id"], "correct": after_is_correct})
         if before_is_correct != after_is_correct:
             changes.append({
                 "id": record["id"], "reading": record["reading"], "gold": record["gold"],
@@ -262,36 +229,20 @@ def _top1_stats(records: Sequence[dict[str, Any]], orders: dict[str, Sequence[di
                 "after_top1": after[0]["surface"] if after else None,
                 "gold_rank_before": before_rank, "gold_rank_after": after_rank,
             })
+    table = paired_table(before_records, after_records)
     return {
         "examples": len(records),
-        "correct": sum(before_correct),
-        "accuracy": sum(before_correct) / len(records) if records else 0.0,
-        "gold_rank": _rank_distribution(before_ranks),
-        "after_correct": sum(after_correct),
-        "after_accuracy": sum(after_correct) / len(records) if records else 0.0,
-        "gold_rank_after": _rank_distribution(after_ranks),
+        "correct": table["a"] + table["b"],
+        "accuracy": (table["a"] + table["b"]) / len(records) if records else 0.0,
+        "gold_rank": gold_rank_histogram(records),
+        "after_correct": table["a"] + table["c"],
+        "after_accuracy": (table["a"] + table["c"]) / len(records) if records else 0.0,
+        "gold_rank_after": gold_rank_histogram([
+            {"gold": record["gold"], "candidates": orders[record["id"]]} for record in records
+        ]),
         "gained": sorted((item for item in changes if item["gold_rank_before"] != 1 and item["gold_rank_after"] == 1), key=lambda item: item["id"]),
         "lost": sorted((item for item in changes if item["gold_rank_before"] == 1 and item["gold_rank_after"] != 1), key=lambda item: item["id"]),
     }
-
-
-def _pair_stats(records: Sequence[dict[str, Any]], orders: dict[str, Sequence[dict[str, Any]]]) -> dict[str, int]:
-    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for record in records:
-        if record.get("contrast_pair_id") is not None:
-            groups[record["contrast_pair_id"]].append(record)
-    result = {"both_correct": 0, "one_correct": 0, "both_wrong": 0, "incomplete": 0}
-    for group in groups.values():
-        correct = sum(_rank(orders[item["id"]], item["gold"]) == 1 for item in group)
-        if len(group) != 2:
-            result["incomplete"] += 1
-        elif correct == 2:
-            result["both_correct"] += 1
-        elif correct == 1:
-            result["one_correct"] += 1
-        else:
-            result["both_wrong"] += 1
-    return result
 
 
 def combine_records(
@@ -311,9 +262,14 @@ def combine_records(
     orders: dict[str, Sequence[dict[str, Any]]] = {}
     for record in records:
         should_rank = not record.get("context_empty", False) and (gate is None or record in selected)
-        orders[record["id"]] = top1_from_scores(
-            record["candidates"], viterbi_weight, ce_weight, rerank_k,
-            context_empty=not should_rank,
+        candidates = record["candidates"]
+        if not should_rank:
+            candidates = [{**candidate, "relevance": None} for candidate in candidates]
+        orders[record["id"]] = ranked_candidates_from_scores(
+            candidates,
+            viterbi_weight=viterbi_weight,
+            reranker_weight=ce_weight,
+            rerank_k=rerank_k,
         )
     all_stats = _top1_stats(records, orders)
     contrast = [record for record in records if record.get("contrast_pair_id") is not None]
@@ -337,7 +293,13 @@ def combine_records(
         "context_empty": sum(record.get("context_empty", False) for record in records),
         "all": all_stats,
         "contrast": contrast_stats,
-        "pair": _pair_stats(records, orders),
+        "pair": pair_level([
+            {
+                "contrast_pair_id": record.get("contrast_pair_id"),
+                "correct": _rank(orders[record["id"]], record["gold"]) == 1,
+            }
+            for record in records
+        ]),
         "latency": {
             "host": socket.gethostname(),
             "total_seconds": sum(float(record.get("elapsed_seconds", 0.0)) for record in records),

@@ -15,6 +15,7 @@ from beme.converter import Converter
 from beme.dictionary import Dictionary, DictionaryEntry
 from beme.features import FeatureExtractor, LEGACY_V1_SPEC
 from beme.reranker import ConversionContext, MockContextReranker
+from beme.rerank_stats import top1_from_scores
 from beme.scorer import LinearScorer
 from beme.training_data import TrainingExample
 from beme.weights import Weights
@@ -70,8 +71,10 @@ def test_combine_matches_converter_for_all_head_sizes(rerank_k: int | None) -> N
     actual.reranker = FixedReranker(relevance)
     actual.rerank_k = rerank_k
     expected = actual.convert("あ", k=4, context=ConversionContext("文脈"), allow_literals=True)
-    combined = rerank_eval.top1_from_scores(record["candidates"], 1.0, 1.0, rerank_k)
-    assert [item["surface"] for item in combined] == [candidate.surface for candidate in expected.candidates]
+    combined = top1_from_scores(
+        record["candidates"], viterbi_weight=1.0, reranker_weight=1.0, rerank_k=rerank_k,
+    )
+    assert combined == expected.candidates[0].surface
 
 
 def test_empty_context_is_not_scored_and_keeps_order() -> None:
@@ -102,7 +105,9 @@ def test_absent_gold_is_counted_in_rank_distribution() -> None:
 def test_incomplete_pair_is_explicitly_counted() -> None:
     record = scored_record()
     result = rerank_eval.combine_records([record], 1.0, 2)
-    assert result["pair"] == {"both_correct": 0, "one_correct": 0, "both_wrong": 0, "incomplete": 1}
+    assert result["pair"] == {
+        "both_correct": 0, "one_correct": 0, "both_wrong": 0, "incomplete_pairs": 1,
+    }
 
 
 def test_combine_output_is_byte_stable(tmp_path: Path) -> None:
