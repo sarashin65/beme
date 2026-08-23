@@ -28,7 +28,7 @@ class LinearScorer:
     """Score edges and boundaries as a weighted sum of extracted features."""
 
     def __init__(self, extractor: FeatureExtractor, weights: Weights) -> None:
-        from .features import FeatureExtractor
+        from .features import FeatureExtractor, state_key_function
 
         if not isinstance(extractor, FeatureExtractor):
             raise TypeError("extractor must be a FeatureExtractor")
@@ -37,6 +37,10 @@ class LinearScorer:
         self.extractor = extractor
         self.weights = weights
         self.spec_id = extractor.spec.id
+        # k_best_viterbi calls state_key several times per edge, so resolve the
+        # specification's state definition once here instead of re-inspecting
+        # it inside that loop.
+        self._state_key = state_key_function(extractor.spec)
         # Keyed by edge.token, not by the LatticeEdge itself: lexical_features
         # and transition_features are documented as position-independent (see
         # features.path_features), so edge.start/edge.end carry no scoring
@@ -52,9 +56,7 @@ class LinearScorer:
         self._transition_cache: dict[tuple[Hashable | None, Token], float] = {}
 
     def state_key(self, edge: LatticeEdge) -> Hashable:
-        from .features import extractor_state_key
-
-        return extractor_state_key(self.extractor, edge)
+        return self._state_key(edge)
 
     def _dot(self, features: dict[str, float]) -> float:
         total = 0.0

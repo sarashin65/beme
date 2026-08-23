@@ -121,23 +121,32 @@ def _condition_summary(root: Path, condition: str, seeds: list[int]) -> dict[str
         diag = json.loads(diagnose_path.read_text(encoding="utf-8")) if diagnose_path.is_file() else None
         runs.append({"seed": seed, "test": report["selected_model"]["test"], "evaluate": evaluate, "diagnose": diag, "normalized_weights": _normalized_weights(directory / "weights.json"), "complete": evaluate is not None and diag is not None})
     model_errors = [run["test"]["end_to_end_errors"] for run in runs]
-    a0_runs = []
+    # The contingency table is (A0 correct/wrong) x (condition correct/wrong)
+    # over the *learned* model of each, paired by seed: the ablation question
+    # is whether the condition differs from A0, not whether training moved the
+    # untrained baseline (which is the same document for every condition and
+    # would make even a condition identical to A0 look significant).
+    a0_runs = {}
     for seed in seeds:
         path = root / "A0" / f"seed{seed}" / "diagnose_d1.json"
         if path.is_file():
-            a0_runs.append(json.loads(path.read_text(encoding="utf-8")))
+            a0_runs[seed] = json.loads(path.read_text(encoding="utf-8"))
     tables = []
     for run in runs:
-        if not run["diagnose"]:
+        a0 = a0_runs.get(run["seed"])
+        if not run["diagnose"] or not a0:
             continue
-        a0 = next((item for item in a0_runs if item.get("dataset", {}).get("examples") == run["diagnose"].get("dataset", {}).get("examples")), None)
-        if not a0:
-            continue
-        base = {item["id"]: item["baseline"]["correct"] for item in a0["cases"]}
+        base = {item["id"]: item["learned"]["correct"] for item in a0["cases"]}
         current = {item["id"]: item["learned"]["correct"] for item in run["diagnose"]["cases"]}
-        b = sum(base.get(key, False) and not value for key, value in current.items())
-        c = sum(not base.get(key, False) and value for key, value in current.items())
-        tables.append({"seed": run["seed"], "table": mcnemar(b, c)})
+        shared = sorted(set(base) & set(current))
+        b = sum(base[key] and not current[key] for key in shared)
+        c = sum(not base[key] and current[key] for key in shared)
+        tables.append({
+            "seed": run["seed"],
+            "compared": len(shared),
+            "unpaired": len(set(base) ^ set(current)),
+            "table": mcnemar(b, c),
+        })
     return {"seeds": runs, "test_end_to_end_errors": summarize_values(model_errors), "mcnemar": tables}
 
 
@@ -151,10 +160,20 @@ def summarize_only(root: Path) -> dict[str, Any]:
     a0_errors = conditions.get("A0", {}).get("test_end_to_end_errors", {}).get("median")
     for condition, value in conditions.items():
         median = value["test_end_to_end_errors"]["median"]
-        table = value["mcnemar"][0]["table"] if value["mcnemar"] else None
+        # The representative table is the first requested seed, addressed by
+        # seed rather than by position so it cannot silently become another
+        # seed's table when one run is missing.
+        representative = next((item for item in value["mcnemar"] if item["seed"] == SEEDS[0]), None)
+        table = representative["table"] if representative else None
         if condition == "A0":
+            # A0 against itself is b = c = 0 by construction; the label is
+            # stated rather than derived so the self-comparison is explicit.
             label = "indeterminate"
         elif table is None or a0_errors is None or table["p_value"] >= 0.05:
+            label = "indeterminate"
+        elif median == a0_errors:
+            # A significant table with no median difference does not order the
+            # two conditions, so neither direction may be claimed.
             label = "indeterminate"
         elif median > a0_errors:
             label = "significant_worse"
@@ -168,6 +187,7 @@ def summarize_only(root: Path) -> dict[str, Any]:
         "skipped": [condition for condition in CONDITIONS if condition not in available],
         "interpretation_notes": {
             "decision_basis": "d1 test McNemar result and end-to-end error median; suite metrics are descriptive only",
+            "mcnemar_comparison": "learned condition against learned A0 on the same seed; b = A0 correct and condition wrong, c = the reverse",
             "linear_dependency": "lex.script.* and trans.* both count one token per path, so raw weights are not feature importance",
             "reading_length": "lex.reading_len is structurally constant for a reading and is not learned",
             "transition_only": "A2 tie-heavy one-token behavior is an expected ablation lower bound, not an error",

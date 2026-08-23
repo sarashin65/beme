@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from functools import lru_cache
 import math
 from typing import TYPE_CHECKING, Hashable, NamedTuple
@@ -338,13 +338,14 @@ def path_features(
     features: dict[str, float] = {}
     previous: Hashable | None = None
     position = 0
+    state_key = state_key_function(extractor.spec)
     for token in path.tokens:
         edge = LatticeEdge(position, position + len(token.reading), token)
         for name, value in extractor.lexical_features(edge).items():
             features[name] = features.get(name, 0.0) + value
         for name, value in extractor.transition_features(previous, edge).items():
             features[name] = features.get(name, 0.0) + value
-        previous = extractor_state_key(extractor, edge)
+        previous = state_key(edge)
         position = edge.end
     # The scorer accumulates edge and transition terms in path order, while a
     # feature vector necessarily groups equal feature names.  Preserve the
@@ -377,17 +378,36 @@ def path_features(
     return features
 
 
+def _pos_state_key(edge: LatticeEdge) -> Hashable:
+    return edge.token.pos
+
+
+def _pos_right_id_state_key(edge: LatticeEdge) -> Hashable:
+    return TransitionState(edge.token.pos, edge.token.right_id)
+
+
+def state_key_function(spec: FeatureSpec) -> Callable[[LatticeEdge], Hashable]:
+    """Resolve a specification's state definition to a callable, once.
+
+    ``state_key`` is called several times per edge from the k-best inner loop
+    (``lattice.k_best_viterbi``), so the specification must be inspected when
+    the scorer is built rather than on every call.
+    """
+
+    if spec.transition_state == ("pos",):
+        return _pos_state_key
+    if spec.transition_state == ("pos", "right_id"):
+        return _pos_right_id_state_key
+    raise ValueError(f"unsupported feature specification: {spec.id!r}")
+
+
 def extractor_state_key(extractor: FeatureExtractor, edge: LatticeEdge) -> Hashable:
     """Return the state used by the phase-1 extractor for a reconstructed edge."""
 
     # FeatureExtractor currently has the same state definition as LinearScorer.
     # Keeping this small adapter here avoids making path serialization depend on
     # a scorer instance.
-    if extractor.spec.transition_state == ("pos",):
-        return edge.token.pos
-    if extractor.spec.transition_state == ("pos", "right_id"):
-        return TransitionState(edge.token.pos, edge.token.right_id)
-    raise ValueError(f"unsupported feature specification: {extractor.spec.id!r}")
+    return state_key_function(extractor.spec)(edge)
 
 
 def feature_delta(
@@ -420,4 +440,5 @@ __all__ = [
     "path_features",
     "registered_spec_ids",
     "resolve_spec",
+    "state_key_function",
 ]

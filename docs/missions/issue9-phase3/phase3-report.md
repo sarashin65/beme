@@ -21,6 +21,11 @@ uv run python scripts/run_ablations.py --summarize-only --output-root artifacts/
 
 ## 2. Ablation Matrix Results
 
+> **本節の `McNemar p` 列と `label` 列は無効である（PR #14 レビュー指摘・未再集約）。**
+> 集約時の `run_ablations.py` は分割表を `(A0 の未学習 baseline) × (条件の learned)` で作っていた。task8-mission §3 が指定した `(A0 正/誤) × (条件 正/誤)` ではないため、この p 値は「学習が未学習ベースラインを動かしたか」の検定であり、条件と A0 の差の検定ではない。未学習ベースラインの document は全条件で同一なので、A0 と 1 件も違わない条件でも `significant_better` が出る。中央値 529 対 538 の A4 に p=4.7e-11 が付いているのはこのためである。
+> 集約コードは修正済み（`learned` 同士・同一 seed でのペアリング）だが、artifact は GPU マシンにのみ存在するため再集約していない。`--summarize-only` の再実行（**再学習は不要**）で `summary.json` を作り直し、本節・§9・§10 の判定を書き直すこと。
+> `test error median` と `min-max` は分割表と独立に `report.json` から読んだ値なので影響を受けない。
+
 `test error` は d1 test の `end_to_end_errors` で、3 seed の中央値と min-max を示す。
 
 | condition | spec | test error median | min-max | McNemar p | label |
@@ -141,16 +146,16 @@ d1 JSONL が無い環境での audit だったため、d1 と評価データの 
 
 ## 9. Negative and Null Results
 
-- A1、A3、F0、F1 は A0 より test error 中央値が悪化し、A1/F0/F1 は `significant_worse` と判定された。A3 は downstream failure を含むため `indeterminate` と扱った記録もあり、summary の最終 label は `significant_worse` だが、欠損 artifact の制約を併記する。
+- A1、A3、F0、F1 は A0 より test error 中央値が悪化した。記録された `significant_worse` は §2 の注記のとおり無効な分割表によるもので、再集約まで有意性は主張しない。A3 は downstream failure を含むため `indeterminate` と扱った記録もあり、欠損 artifact の制約を併記する。
 - A2 は transition-only の zero-cost tie collapse が起き、AJIMEE evaluate は候補空/探索長時間化で完走しなかった。これは想定された縮退下限であり、推測値を補っていない。
-- A4/A5/A6/M0/M1/X0 は `significant_better` だが、既存 suite の小標本値を採否根拠にはしていない。
+- A4/A5/A6/M0/M1/X0 は A0 より test error 中央値が良い。記録された `significant_better` は §2 の注記のとおり無効なので、再集約まで「有意に改善」とは書かない。とくに差が 8〜9 件の A4/A5 は再集約で `indeterminate` になり得る。既存 suite の小標本値は採否根拠にしていない。
 - F2（Wikipedia corpus frequency）は実施していない。外部 corpus が無く、リーク監査を先に必要とするためである。
 - 実リランカを使った `viterbi_weight` の実較正も実施していない。実モデルは GPU 側に無く、Phase 4 scope である。
 - Task 8 後の A2/A3 rerun では A2 3 seed と A3 seed 33 の downstream artifact が欠けた。記録された failed 一覧は summary の `failed` を正本とし、欠損を成功値として扱っていない。
 
 ## 10. Limitations and Phase 4 Handoff
 
-1. 局所モデルの第一候補は X0、対照は A0 とする。ただし X0 の判定は `significant_better`、A0 は基準であり、A2/A3 の collapse と d1 complete audit 不在を考慮する。
+1. 局所モデルの第一候補は X0、対照は A0 とする。ただし X0 の判定は §2 の注記により保留（中央値 534 対 538）であり、A2/A3 の collapse と d1 complete audit 不在も考慮する。再集約の結果しだいでは第一候補を選び直す。
 2. surface recall 曲線は d1 artifact の `beam_width=64` 結果を使う。A0 は learned `.731` at 1 / `1.0` at 64、X0 は `.731` at 1 / `1.0` at 64 だった。頭打ちの正確な unique-surface 分布は記録に含まれていないため、rerank_k をこのレポートだけから決めない。
 3. A0 seed 9 の cost-scale ratio は `.2540704446070626`、従って初期 `viterbi_weight` は `3.9359162831653594`。実リランカで再較正する。
 4. `cascade_threshold` は現状 gate ではない。Phase 4 で実際のカスケード gate として配線するか判断する。

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from beme.dictionary import Dictionary, DictionaryEntry
 from beme.features import TransitionState, extractor_for, extractor_state_key
 from beme.lattice import LatticeEdge, Token, build_lattice, k_best_viterbi
@@ -67,3 +69,26 @@ def test_negative_matrix_cost_k_best_matches_exhaustive_paths() -> None:
     paths = k_best_viterbi(lattice, beam_width=4, scorer=scorer)
     assert paths
     assert all(paths[index].cost <= paths[index + 1].cost for index in range(len(paths) - 1))
+
+
+def test_state_key_strategy_is_resolved_once_when_the_scorer_is_built() -> None:
+    """state_key runs in the k-best inner loop and must not re-dispatch.
+
+    Resolving the strategy in __init__ also means an unsupported state
+    definition is refused when the scorer is built, not mid-search.
+    """
+    from beme.features import FeatureSpec, state_key_function
+
+    for spec_id, expected in (
+        ("decomposed_v1", "noun"),
+        ("decomposed_v1+matrix_v1", TransitionState("noun", 31)),
+    ):
+        extractor = extractor_for(spec_id)
+        scorer = LinearScorer(extractor, Weights({}, feature_spec=spec_id))
+        edge = LatticeEdge(0, 1, Token("あ", "亜", "noun", 0.0, left_id=12, right_id=31))
+        assert scorer._state_key is state_key_function(extractor.spec)
+        assert scorer.state_key(edge) == expected == extractor_state_key(extractor, edge)
+
+    unsupported = FeatureSpec("unsupported", transition_state=("pos", "surface"))
+    with pytest.raises(ValueError, match="unsupported feature specification"):
+        state_key_function(unsupported)
