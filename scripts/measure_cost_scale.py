@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from collections.abc import Iterable
 import hashlib
 import json
@@ -141,6 +142,63 @@ def _ajimee_readings(path: Path) -> list[str]:
     return [katakana_to_hiragana(reading) for reading in readings]
 
 
+SOURCES = ("converter", "evaluation", "cli")
+
+
+def needs_rerank_references() -> list[str]:
+    """Locate every ``needs_rerank`` mention in the source, as path:line."""
+
+    references = []
+    for name in SOURCES:
+        path = ROOT / "src" / "beme" / f"{name}.py"
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if "needs_rerank" in line:
+                references.append(f"{_display_path(path)}:{number}")
+    return references
+
+
+def needs_rerank_gating_uses() -> list[str]:
+    """Return converter.py conditionals whose test reads ``needs_rerank``.
+
+    Only converter.py decides whether to rerank, so a conditional there is
+    what would make the claim false; cli.py branches on the flag to print it,
+    which is display, not gating.
+    """
+
+    path = ROOT / "src" / "beme" / "converter.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    uses = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.If, ast.IfExp, ast.While)):
+            continue
+        reads = any(
+            (isinstance(child, ast.Name) and child.id == "needs_rerank")
+            or (isinstance(child, ast.Attribute) and child.attr == "needs_rerank")
+            for child in ast.walk(node.test)
+        )
+        if reads:
+            uses.append(f"{_display_path(path)}:{node.lineno}")
+    return uses
+
+
+def _needs_rerank_finding() -> dict[str, Any]:
+    """Re-derive the finding from the source rather than restating it.
+
+    Hardcoded line numbers go stale silently once the source moves, so the
+    references are located and the claim is re-checked with the parser every
+    run: the claim holds exactly while no conditional tests needs_rerank.
+    """
+
+    gating = needs_rerank_gating_uses()
+    return {
+        "confirmed": not gating,
+        "detail": "needs_rerank is computed and carried on ConversionResult, but no conditional in converter.py tests it; reranking is gated on context and reranker presence instead.",
+        "references": needs_rerank_references(),
+        "gating_uses": gating,
+        "impact": "cascade_threshold does not affect accuracy metrics; recalibration is a statistic, not an optimization.",
+    }
+
+
 def _atomic_json(path: Path, document: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".cost-scale-", dir=path.parent)
@@ -199,12 +257,7 @@ def main(argv: list[str] | None = None) -> int:
             "threshold_learned": learned_summary["recalibrated_threshold"],
         }
     findings = {
-        "needs_rerank_is_unused": {
-            "confirmed": True,
-            "detail": "Verified by source search: converter.py computes needs_rerank at line 174, while reranked is gated at line 176; only evaluation.py reads needs_rerank for aggregation.",
-            "references": ["src/beme/converter.py:174", "src/beme/converter.py:176", "src/beme/evaluation.py:250"],
-            "impact": "cascade_threshold does not affect accuracy metrics; recalibration is a statistic, not an optimization.",
-        },
+        "needs_rerank_is_unused": _needs_rerank_finding(),
         "viterbi_weight_out_of_scope": {
             "reason": "viterbi_weight is used by CrossEncoderReranker and LLMLogitsReranker only; wiring K-best into a reranker is deferred to Phase 4.",
         },

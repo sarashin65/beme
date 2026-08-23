@@ -16,11 +16,14 @@ _HEADER = struct.Struct("<8sHHI")
 
 
 def map_matrix_cost(raw_cost: int) -> float:
-    """Put raw matrix costs on the existing IPADIC cost scale.
+    """Put raw matrix costs on a thousand-unit scale.
 
-    The existing raw-cost ceiling is used as the scale unit.  Unlike word
-    costs, matrix costs are centered around zero, so negative values are
-    intentionally preserved rather than clamped.
+    The divisor is the magnitude of the connection costs themselves, not the
+    ``ipadic.DEFAULT_RAW_COST_CEILING`` used for word costs, so this feature
+    is deliberately an order of magnitude larger than
+    ``lex.ipadic_cost_mapped``; the learned weight absorbs the difference.
+    Unlike word costs, matrix costs are centered around zero, so negative
+    values are intentionally preserved rather than clamped.
     """
 
     return round(raw_cost / MATRIX_COST_DIVISOR, 3)

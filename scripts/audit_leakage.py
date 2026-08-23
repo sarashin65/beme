@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Audit d1 manifest consistency and evaluation-data overlap independently."""
+"""Audit d1 manifest consistency and evaluation-data overlap independently.
+
+Exits 1 when a check that actually ran failed; checks that could not run are
+recorded under ``unverifiable`` and do not fail the audit.
+"""
 
 from __future__ import annotations
 
@@ -112,8 +116,16 @@ def audit_evaluation_overlap(d1_dir: Path, ajimee_path: Path, mozc_path: Path, c
     evaluation = _evaluation_material(ajimee_path, mozc_path, cases_path)
     d1, available = _d1_examples(d1_dir)
     if not available:
-        empty = {"document_leakage": {"verified": False, "matched": None, "reason": "d1 JSONL files are unavailable"}, "reading_overlap": {"verified": False, "count": None, "rate": None, "is_leakage": False}, "vocabulary_overlap": {"verified": False, "matched": None, "total": None, "rate": None, "is_leakage": False}}
-        return {name: dict(empty) for name in evaluation}, False
+        # Built per name rather than shared: dict(empty) is a shallow copy, so
+        # every suite would otherwise point at the same three inner dicts.
+        def unavailable() -> dict[str, Any]:
+            reason = "d1 JSONL files are unavailable"
+            return {
+                "document_leakage": {"verified": False, "matched": None, "evaluation_ngrams": None, "leakage_detected": None, "counts_as_leakage": True, "reason": reason},
+                "reading_overlap": {"verified": False, "count": None, "total": None, "rate": None, "counts_as_leakage": False, "reason": reason},
+                "vocabulary_overlap": {"verified": False, "matched": None, "total": None, "rate": None, "counts_as_leakage": False, "reason": reason},
+            }
+        return {name: unavailable() for name in evaluation}, False
     d1_readings = {example.reading for rows in d1.values() for example in rows}
     train_surfaces = {example.target_surface for example in d1["train"]}
     d1_ngrams = set()
@@ -126,10 +138,14 @@ def audit_evaluation_overlap(d1_dir: Path, ajimee_path: Path, mozc_path: Path, c
         eval_ngrams = {gram for text in values["documents"] for gram in (text[index:index + 12] for index in range(max(0, len(text) - 11)))}
         reading_count = len(values["readings"] & d1_readings)
         vocabulary_count = len(values["surfaces"] & train_surfaces)
+        # counts_as_leakage classifies the metric, not this run: a shared
+        # document n-gram is leakage, while a shared reading or surface is
+        # ordinary vocabulary overlap.  leakage_detected is the finding.
+        matched_ngrams = len(eval_ngrams & d1_ngrams)
         result[name] = {
-            "document_leakage": {"verified": True, "matched": len(eval_ngrams & d1_ngrams), "evaluation_ngrams": len(eval_ngrams), "is_leakage": True},
-            "reading_overlap": {"verified": True, "count": reading_count, "total": len(values["readings"]), "rate": reading_count / len(values["readings"]) if values["readings"] else 0.0, "is_leakage": False},
-            "vocabulary_overlap": {"verified": True, "matched": vocabulary_count, "total": len(values["surfaces"]), "rate": vocabulary_count / len(values["surfaces"]) if values["surfaces"] else 0.0, "is_leakage": False},
+            "document_leakage": {"verified": True, "matched": matched_ngrams, "evaluation_ngrams": len(eval_ngrams), "leakage_detected": matched_ngrams > 0, "counts_as_leakage": True},
+            "reading_overlap": {"verified": True, "count": reading_count, "total": len(values["readings"]), "rate": reading_count / len(values["readings"]) if values["readings"] else 0.0, "counts_as_leakage": False},
+            "vocabulary_overlap": {"verified": True, "matched": vocabulary_count, "total": len(values["surfaces"]), "rate": vocabulary_count / len(values["surfaces"]) if values["surfaces"] else 0.0, "counts_as_leakage": False},
         }
     return result, True
 
@@ -181,10 +197,26 @@ def main(argv: list[str] | None = None) -> int:
     unverifiable = []
     if not available:
         unverifiable.extend(["split field recomputation against article IDs", "d1-vs-evaluation document n-gram overlap", "d1-vs-evaluation reading overlap", "d1 train vocabulary overlap"])
-    document = {"manifest_consistency": consistency, "split_recomputation": split, "evaluation_overlap": overlap, "mozc_source_document_claim": mozc_claim, "d1_jsonl_available": available, "unverifiable": unverifiable}
+    # Checks that could not run are reported as unverifiable, not as failures:
+    # only a check that actually ran and came back bad fails the audit.
+    failures = []
+    if not consistency["all_passed"]:
+        failures.extend(f"manifest_consistency:{item['name']}" for item in consistency["checks"] if not item["passed"])
+    if split.get("mismatches"):
+        failures.append("split_recomputation")
+    failures.extend(
+        f"document_leakage:{name}" for name, value in sorted(overlap.items())
+        if value["document_leakage"]["leakage_detected"]
+    )
+    if not mozc_claim["verified"]:
+        failures.append("mozc_source_document_claim")
+    document = {"manifest_consistency": consistency, "split_recomputation": split, "evaluation_overlap": overlap, "mozc_source_document_claim": mozc_claim, "d1_jsonl_available": available, "unverifiable": unverifiable, "failures": failures}
     _atomic_json(args.output, document)
     if args.json:
         print(json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2))
+    if failures:
+        print(f"audit failed: {', '.join(failures)}", file=sys.stderr)
+        return 1
     return 0
 
 

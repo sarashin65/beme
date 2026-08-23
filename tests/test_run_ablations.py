@@ -28,6 +28,27 @@ def test_condition_table_and_mcnemar_methods() -> None:
     assert value.mcnemar(20, 10)["method"] == "continuity_corrected_chi_squared"
 
 
+@pytest.mark.parametrize(
+    "b, c, expected, method",
+    [
+        # Exact: two-sided binomial, p = 2 * P(X <= min(b, c)) capped at 1.
+        (5, 0, 2 * (1 / 32), "exact_binomial_two_sided"),          # 2 * 1/2^5
+        (0, 4, 2 * (1 / 16), "exact_binomial_two_sided"),          # 2 * 1/2^4
+        (2, 1, 1.0, "exact_binomial_two_sided"),                   # 2 * (1+3)/8, capped
+        (0, 0, 1.0, "exact_binomial_two_sided"),                   # no discordant pairs
+        # Continuity-corrected chi-square on 1 df, p = erfc(sqrt(chi2 / 2)).
+        (20, 10, 0.10034824646229071, "continuity_corrected_chi_squared"),  # chi2 = 9^2/30
+        (30, 10, 0.0026631192591385546, "continuity_corrected_chi_squared"),  # chi2 = 19^2/40
+    ],
+)
+def test_mcnemar_matches_hand_computed_values(b: int, c: int, expected: float, method: str) -> None:
+    value = module()
+    table = value.mcnemar(b, c)
+    assert table["method"] == method
+    assert table["p_value"] == pytest.approx(expected, rel=1e-12)
+    assert (table["b"], table["c"], table["discordant"]) == (b, c, b + c)
+
+
 def test_summary_statistics() -> None:
     value = module()
     assert value.summarize_values([3, 1, 2]) == {"median": 2, "min": 1, "max": 3, "range": [1, 3]}

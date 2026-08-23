@@ -131,10 +131,6 @@ def _atomic_weights(path: Path, weights: Weights) -> None:
     _atomic_json(path, weights.to_dict())
 
 
-def _extractor(feature_spec: str):
-    return extractor_for(feature_spec)
-
-
 def run(args: argparse.Namespace) -> dict[str, object]:
     paths = {"train": args.train, "dev": args.dev, "test": args.test}
     splits, raw_manifest = load_splits(paths)

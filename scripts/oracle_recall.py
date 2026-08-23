@@ -115,6 +115,13 @@ def measure(
     beam_width: int,
 ) -> dict[str, Any]:
     examples = list(examples)
+    # Candidates are deduplicated and cost-sorted before the k cut, and only a
+    # reranker could reorder them, so convert(k=max) is convert(k) for every
+    # smaller k.  Converting once per example instead of once per k is what
+    # keeps this affordable on the degenerate ablations.
+    if converter.reranker is not None:
+        raise ValueError("oracle recall requires a converter without a reranker")
+    largest = max(ks)
     covered = 0
     path_hits = {k: 0 for k in ks}
     surface_hits = {k: 0 for k in ks}
@@ -123,14 +130,18 @@ def measure(
         lattice = converter.build_lattice(reading)
         is_covered = constrained_best_path(lattice, gold, scorer) is not None
         covered += is_covered
-        paths = k_best_viterbi(lattice, beam_width=max(ks), scorer=scorer)
+        paths = k_best_viterbi(lattice, beam_width=largest, scorer=scorer)
         surfaces = {path.surface for path in paths[:beam_width]}
         unique_counts.append(len(surfaces))
+        path_rank = next((rank for rank, path in enumerate(paths, 1) if path.surface == gold), None)
+        candidates = converter.convert(reading, k=largest, allow_literals=True).candidates
+        surface_rank = next(
+            (rank for rank, candidate in enumerate(candidates, 1) if candidate.surface == gold), None
+        )
         for k in ks:
-            if any(path.surface == gold for path in paths[:k]):
+            if path_rank is not None and path_rank <= k:
                 path_hits[k] += 1
-            result = converter.convert(reading, k=k, allow_literals=True)
-            if any(candidate.surface == gold for candidate in result.candidates):
+            if surface_rank is not None and surface_rank <= k:
                 surface_hits[k] += 1
     total = len(examples)
     coverage_rate = covered / total if total else 0.0
@@ -155,9 +166,11 @@ def measure(
     if path_at_beam is not None and any(rate > path_at_beam + 1e-12 for rate in surface_rates):
         raise ValueError("surface recall cannot exceed path recall at beam width")
     if ks[0] == 1:
-        model_error_rate = 1.0 - path_rates[0]
-        if not math.isclose(path_rates[0], 1.0 - model_error_rate, abs_tol=1e-12):
-            raise ValueError("path recall@1 does not match model error rate")
+        # Both are "the gold surface is the top-ranked one", reached by two
+        # independent routes (k_best_viterbi here, Converter.convert there),
+        # so a disagreement means the two are not scoring the same model.
+        if not math.isclose(path_rates[0], surface_rates[0], abs_tol=1e-12):
+            raise ValueError("path recall@1 and surface recall@1 disagree")
     return result
 
 
