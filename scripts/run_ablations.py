@@ -211,6 +211,21 @@ def _run_one(root: Path, condition: str, seed: int, force: bool) -> dict[str, An
     return {"condition": condition, "seed": seed, "seconds": time.monotonic() - started}
 
 
+def _should_run_a0(conditions: list[str], seeds: list[int], force: bool, root: Path) -> bool:
+    return "A0" in conditions and 9 in seeds and (
+        force or not (root / "A0" / "seed9" / "a0_gate.json").is_file()
+    )
+
+
+def _pending_runs(conditions: list[str], seeds: list[int]) -> list[tuple[str, int]]:
+    return [
+        (condition, seed)
+        for condition in conditions
+        for seed in seeds
+        if not (condition == "A0" and seed == 9)
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--conditions", default=",".join(CONDITIONS))
@@ -236,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
     failures = []
     results = []
     # A0 is deliberately isolated and must pass before any other work starts.
-    if "A0" in conditions and 9 in seeds and not (root / "A0" / "seed9" / "a0_gate.json").is_file():
+    if _should_run_a0(conditions, seeds, args.force, root):
         try:
             results.append(_run_one(root, "A0", 9, args.force))
             report = json.loads((root / "A0" / "seed9" / "report.json").read_text(encoding="utf-8"))
@@ -249,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"A0 failed: {exc}", file=sys.stderr)
             return 2
-    pending = [(condition, seed) for condition in conditions for seed in seeds if not (condition == "A0" and seed == 9 and (root / "A0" / "seed9" / "a0_gate.json").is_file())]
+    pending = _pending_runs(conditions, seeds)
     jobs = args.jobs
     with ThreadPoolExecutor(max_workers=jobs) as executor:
         futures = {executor.submit(_run_one, root, condition, seed, args.force): (condition, seed) for condition, seed in pending}
