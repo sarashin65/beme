@@ -7,6 +7,7 @@ import math
 import sys
 from bisect import bisect_left
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 from typing import Iterable
 
@@ -104,6 +105,32 @@ class Dictionary:
             reading: tuple(values) for reading, values in grouped.items()
         }
         self._readings = tuple(self._entries_by_reading)
+
+    @cached_property
+    def reading_conditional(self) -> dict[str, tuple[float, int]]:
+        """Per-reading log partition and candidate count, built on first use.
+
+        Only the ``freq_v1`` feature specifications read this table, so
+        building it eagerly would put a log-sum-exp over every reading
+        (200k for dictionary_v2) into every dictionary load, including the
+        conversions and specifications that never touch it.
+        """
+
+        from .ipadic import READING_CONDITIONAL_TEMPERATURE
+
+        table: dict[str, tuple[float, int]] = {}
+        for reading, reading_entries in self._entries_by_reading.items():
+            raw_costs = [entry.raw_cost for entry in reading_entries if entry.raw_cost is not None]
+            if raw_costs:
+                scaled = [-raw / READING_CONDITIONAL_TEMPERATURE for raw in raw_costs]
+                maximum = max(scaled)
+                log_partition = maximum + math.log(
+                    sum(math.exp(value - maximum) for value in scaled)
+                )
+            else:
+                log_partition = 0.0
+            table[reading] = (log_partition, len(reading_entries))
+        return table
 
     @classmethod
     def from_tsv(cls, path: str | Path) -> "Dictionary":

@@ -50,6 +50,26 @@ python scripts/build_ipadic_dictionary.py \
 
 生成物 14.6 MB はリポジトリへ同梱する。固定ソースアーカイブ 12.2 MB は生成物と重複し、上記 URL と SHA-256 から再取得できるため同梱しない。Intel N100 での実測は、TSV ロード 1.851 秒、14 手作り読みのラティス構築平均 0.228 ms、クリーンな `beme convert きしゃ` プロセスの最大 RSS 159,524 KiB だった。従来の文字単位 Python trie は大辞書で不要なノードを大量生成するため、入力の終端候補を exact-reading index へ照会する方式へ変更した。
 
+## IPADIC 接続コスト表（`ipadic_matrix_v1.bin`）
+
+`ipadic_matrix_v1.bin` は MeCab IPADIC `2.7.0-20070801` の `matrix.def` から、`dictionary_v2.tsv` が実際に使う `left_id` / `right_id`（および BOS/EOS の `0`）の組だけを切り出したコンパクトな接続コスト表です。学習可能スコアラーの `trans.matrix_cost` 特徴（feature spec `decomposed_v1+matrix_v1` 系）が参照します。
+
+- 出所: [MeCab IPADIC](https://taku910.github.io/mecab/) の `matrix.def`。`dictionary.tsv` と同じ固定ソース [`mecab-ipadic_2.7.0-20070801+main.orig.tar.gz`](https://deb.debian.org/debian/pool/main/m/mecab-ipadic/mecab-ipadic_2.7.0-20070801+main.orig.tar.gz)（SHA-256 `b62f527d881c504576baed9c6ef6561554658b175ce6ae0096a60307e49e3523`）に含まれます
+- 原典の寸法: 1316×1316、1,731,857 行、23,008,378 bytes
+- 生成物: 802 id、643,204 ペア、1,289,632 bytes
+- 生成物 SHA-256: `96eb8b1359a4382bdf3962a656cafbf1d687cb4d4a08a570d388db49d335646e`
+- ライセンス: `dictionary.tsv` と同じ NAIST / ICOT の IPADIC ライセンス。全文は `licenses/IPADIC.txt`
+
+`ipadic` pip パッケージが同梱するのはコンパイル済みの `matrix.bin` だけで `matrix.def` は入っていません。再生成には tarball から取り出した `matrix.def` が要ります。
+
+```sh
+uv run python scripts/build_matrix_table.py path/to/matrix.def \
+  --dictionary data/dictionary_v2.tsv \
+  --output data/ipadic_matrix_v1.bin --json
+```
+
+形式は `BEMEMAT1` マジック + version(u16) + 予約(u16) + id 数(u32)、続けて昇順の id 列（i32）、続けて行優先の cost 行列（i16）です。参照時は raw cost を 1000 で割って BeME のスケールへ写します。単語コストと違い matrix cost はゼロ点に意味があるため、負値は切り捨てません（`src/beme/matrix_cost.py`）。
+
 ## BeME 手作りケース
 
 `evaluation_cases.jsonl` は BeME 独自の 14 件（文脈なし 12 件、文脈付き 2 件）です。既存の NDCG / MRR / Top-1 評価に使います。

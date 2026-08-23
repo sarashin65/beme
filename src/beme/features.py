@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Hashable
+from collections.abc import Callable, Mapping
+from functools import lru_cache
+import math
+from typing import TYPE_CHECKING, Hashable, NamedTuple
 import unicodedata
 
 from .lattice import LatticeEdge
@@ -34,6 +36,8 @@ class FeatureSpec:
     id: str
     lexical_features: tuple[str, ...] = ("lex.base_cost",)
     transition_features: tuple[str, ...] = ()
+    family: str = "legacy_v1"
+    transition_state: tuple[str, ...] = ("pos",)
 
     @classmethod
     def legacy_v1(cls) -> "FeatureSpec":
@@ -58,6 +62,7 @@ class FeatureSpec:
                 "trans.same_pos",
                 "trans.default",
             ),
+            "legacy_v1",
         )
 
     @classmethod
@@ -72,6 +77,7 @@ class FeatureSpec:
                 "lex.proper_noun",
             ),
             LEGACY_V1_SPEC.transition_features if "LEGACY_V1_SPEC" in globals() else FeatureSpec.legacy_v1().transition_features,
+            "decomposed_v1",
         )
 
 
@@ -81,13 +87,18 @@ LEGACY_V1_SPEC = FeatureSpec.legacy_v1()
 class FeatureExtractor:
     """Extract the active lexical and transition features for an edge."""
 
-    def __init__(self, spec: FeatureSpec = LEGACY_V1_SPEC) -> None:
+    def __init__(
+        self,
+        spec: FeatureSpec = LEGACY_V1_SPEC,
+        reading_conditional: Mapping[str, tuple[float, int]] | None = None,
+    ) -> None:
         if not isinstance(spec, FeatureSpec):
             raise TypeError("spec must be a FeatureSpec")
         self.spec = spec
+        self.reading_conditional = reading_conditional
 
     def lexical_features(self, edge: LatticeEdge) -> dict[str, float]:
-        if self.spec.id == "decomposed_v1":
+        if self.spec.family == "decomposed_v1":
             token = edge.token
             features: dict[str, float] = {
                 "lex.source.overlay": float(token.source == "overlay"),
@@ -136,29 +147,51 @@ class FeatureExtractor:
             else:
                 # v1 dictionaries and hand-written overlays have no raw IPADIC cost.
                 features["lex.base_cost"] = token.cost
-            return features
-        if self.spec.id != "legacy_v1":
+            if {"lex.reading_cond_logprob", "lex.reading_candidate_count"} & set(self.spec.lexical_features):
+                if self.reading_conditional is None:
+                    raise ValueError("reading conditional table is required for this feature specification")
+                log_partition, count = self.reading_conditional.get(token.reading, (0.0, 0))
+                if token.raw_cost is not None:
+                    from .ipadic import READING_CONDITIONAL_TEMPERATURE
+
+                    features["lex.reading_cond_logprob"] = (
+                        token.raw_cost / READING_CONDITIONAL_TEMPERATURE + log_partition
+                    )
+                features["lex.reading_candidate_count"] = math.log1p(count)
+            return {name: value for name, value in features.items()
+                    if name in self.spec.lexical_features}
+        if self.spec.family != "legacy_v1":
             raise ValueError(f"unsupported feature specification: {self.spec.id!r}")
-        return {"lex.base_cost": edge.token.cost}
+        features = {"lex.base_cost": edge.token.cost}
+        return {name: value for name, value in features.items()
+                if name in self.spec.lexical_features}
 
     def transition_features(
         self, previous: Hashable | None, edge: LatticeEdge
     ) -> dict[str, float]:
-        if self.spec.id not in {"legacy_v1", "decomposed_v1"}:
+        if self.spec.family not in {"legacy_v1", "decomposed_v1"}:
             raise ValueError(f"unsupported feature specification: {self.spec.id!r}")
         current = edge.token.pos
+        previous_pos = previous.pos if isinstance(previous, TransitionState) else previous
         if previous is None:
             name = "trans.bos"
         else:
-            pair = (str(previous), current)
+            pair = (str(previous_pos), current)
             pair_name = f"trans.pair.{pair[0]}>{pair[1]}"
             if pair_name in self.spec.transition_features:
                 name = pair_name
-            elif previous == current:
+            elif previous_pos == current:
                 name = "trans.same_pos"
             else:
                 name = "trans.default"
-        return {name: 1.0}
+        features = {name: 1.0} if name in self.spec.transition_features else {}
+        if "trans.matrix_cost" in self.spec.transition_features:
+            matrix = _matrix_table()
+            previous_right_id = 0 if previous is None else previous.right_id
+            matrix_value = matrix.lookup(previous_right_id, edge.token.left_id)
+            if matrix_value is not None:
+                features["trans.matrix_cost"] = matrix_value
+        return features
 
     def edge_features(self, edge: LatticeEdge) -> dict[str, float]:
         """Return the lexical features active on one edge."""
@@ -167,14 +200,120 @@ class FeatureExtractor:
 
 
 def legacy_v1_extractor() -> FeatureExtractor:
-    return FeatureExtractor(LEGACY_V1_SPEC)
+    return extractor_for("legacy_v1")
 
 
 DECOMPOSED_V1_SPEC = FeatureSpec.decomposed_v1()
 
 
+def _spec_without(base: FeatureSpec, spec_id: str, removed: set[str]) -> FeatureSpec:
+    return FeatureSpec(
+        spec_id,
+        tuple(name for name in base.lexical_features if name not in removed),
+        tuple(name for name in base.transition_features if name not in removed),
+        base.family,
+        base.transition_state,
+    )
+
+
+class TransitionState(NamedTuple):
+    pos: str
+    right_id: int
+
+
+@lru_cache(maxsize=1)
+def _matrix_table():
+    from .matrix_cost import DEFAULT_MATRIX_PATH, MatrixCostTable
+
+    return MatrixCostTable.load(DEFAULT_MATRIX_PATH)
+
+
+MATRIX_V1_SPEC = FeatureSpec(
+    "decomposed_v1+matrix_v1",
+    DECOMPOSED_V1_SPEC.lexical_features,
+    (*DECOMPOSED_V1_SPEC.transition_features, "trans.matrix_cost"),
+    DECOMPOSED_V1_SPEC.family,
+    ("pos", "right_id"),
+)
+MATRIX_V1_POS_PAIRS_SPEC = FeatureSpec(
+    "decomposed_v1+matrix_v1-pos_pairs",
+    MATRIX_V1_SPEC.lexical_features,
+    tuple(name for name in MATRIX_V1_SPEC.transition_features
+          if not name.startswith("trans.pair.")),
+    MATRIX_V1_SPEC.family,
+    MATRIX_V1_SPEC.transition_state,
+)
+
+FREQ_LEXICAL_FEATURES = (
+    "lex.reading_cond_logprob", "lex.reading_candidate_count",
+)
+FREQ_V1_SPEC = FeatureSpec(
+    "decomposed_v1+freq_v1",
+    (*DECOMPOSED_V1_SPEC.lexical_features, *FREQ_LEXICAL_FEATURES),
+    DECOMPOSED_V1_SPEC.transition_features,
+    DECOMPOSED_V1_SPEC.family,
+)
+FREQ_V1_NO_IPADIC_SPEC = FeatureSpec(
+    "decomposed_v1+freq_v1-no_ipadic_cost",
+    tuple(name for name in FREQ_V1_SPEC.lexical_features if name != "lex.ipadic_cost_mapped"),
+    FREQ_V1_SPEC.transition_features,
+    FREQ_V1_SPEC.family,
+)
+MATRIX_FREQ_V1_SPEC = FeatureSpec(
+    "decomposed_v1+matrix_v1+freq_v1",
+    FREQ_V1_SPEC.lexical_features,
+    MATRIX_V1_SPEC.transition_features,
+    MATRIX_V1_SPEC.family,
+    MATRIX_V1_SPEC.transition_state,
+)
+
+
+_ABLATION_REMOVALS = {
+    "decomposed_v1-lex_only": set(DECOMPOSED_V1_SPEC.transition_features),
+    "decomposed_v1-trans_only": set(DECOMPOSED_V1_SPEC.lexical_features),
+    "decomposed_v1-no_ipadic_cost": {"lex.ipadic_cost_mapped"},
+    "decomposed_v1-no_source": {"lex.source.overlay", "lex.overlay_cost"},
+    "decomposed_v1-no_katakana": {"lex.katakana_surface"},
+    "decomposed_v1-no_shape": {
+        *(f"lex.script.{category}" for category in _SCRIPT_CATEGORIES),
+        "lex.surface_len", "lex.proper_noun",
+    },
+}
+_SPEC_REGISTRY = {
+    "legacy_v1": LEGACY_V1_SPEC,
+    "decomposed_v1": DECOMPOSED_V1_SPEC,
+    **{
+        spec_id: _spec_without(DECOMPOSED_V1_SPEC, spec_id, removed)
+        for spec_id, removed in _ABLATION_REMOVALS.items()
+    },
+    MATRIX_V1_SPEC.id: MATRIX_V1_SPEC,
+    MATRIX_V1_POS_PAIRS_SPEC.id: MATRIX_V1_POS_PAIRS_SPEC,
+    FREQ_V1_SPEC.id: FREQ_V1_SPEC,
+    FREQ_V1_NO_IPADIC_SPEC.id: FREQ_V1_NO_IPADIC_SPEC,
+    MATRIX_FREQ_V1_SPEC.id: MATRIX_FREQ_V1_SPEC,
+}
+
+
+def resolve_spec(spec_id: str) -> FeatureSpec:
+    try:
+        return _SPEC_REGISTRY[spec_id]
+    except KeyError as exc:
+        raise ValueError(f"unsupported feature specification: {spec_id!r}") from exc
+
+
+def extractor_for(
+    spec_id: str,
+    reading_conditional: Mapping[str, tuple[float, int]] | None = None,
+) -> FeatureExtractor:
+    return FeatureExtractor(resolve_spec(spec_id), reading_conditional)
+
+
+def registered_spec_ids() -> tuple[str, ...]:
+    return tuple(_SPEC_REGISTRY)
+
+
 def decomposed_v1_extractor() -> FeatureExtractor:
-    return FeatureExtractor(DECOMPOSED_V1_SPEC)
+    return extractor_for("decomposed_v1")
 
 
 def path_features(
@@ -199,20 +338,21 @@ def path_features(
     features: dict[str, float] = {}
     previous: Hashable | None = None
     position = 0
+    state_key = state_key_function(extractor.spec)
     for token in path.tokens:
         edge = LatticeEdge(position, position + len(token.reading), token)
         for name, value in extractor.lexical_features(edge).items():
             features[name] = features.get(name, 0.0) + value
         for name, value in extractor.transition_features(previous, edge).items():
             features[name] = features.get(name, 0.0) + value
-        previous = extractor_state_key(extractor, edge)
+        previous = state_key(edge)
         position = edge.end
     # The scorer accumulates edge and transition terms in path order, while a
     # feature vector necessarily groups equal feature names.  Preserve the
     # legacy scorer's bit-exact total by carrying the rounding residual in its
     # unit-weight lexical feature.  This is only a representation correction:
     # the residual is a reassociation artefact and must stay near one ULP.
-    if extractor.spec.id == "legacy_v1" and features:
+    if extractor.spec.family == "legacy_v1" and features:
         if weights is None:
             from .scorer import legacy_v1_weights
 
@@ -238,15 +378,36 @@ def path_features(
     return features
 
 
+def _pos_state_key(edge: LatticeEdge) -> Hashable:
+    return edge.token.pos
+
+
+def _pos_right_id_state_key(edge: LatticeEdge) -> Hashable:
+    return TransitionState(edge.token.pos, edge.token.right_id)
+
+
+def state_key_function(spec: FeatureSpec) -> Callable[[LatticeEdge], Hashable]:
+    """Resolve a specification's state definition to a callable, once.
+
+    ``state_key`` is called several times per edge from the k-best inner loop
+    (``lattice.k_best_viterbi``), so the specification must be inspected when
+    the scorer is built rather than on every call.
+    """
+
+    if spec.transition_state == ("pos",):
+        return _pos_state_key
+    if spec.transition_state == ("pos", "right_id"):
+        return _pos_right_id_state_key
+    raise ValueError(f"unsupported feature specification: {spec.id!r}")
+
+
 def extractor_state_key(extractor: FeatureExtractor, edge: LatticeEdge) -> Hashable:
     """Return the state used by the phase-1 extractor for a reconstructed edge."""
 
     # FeatureExtractor currently has the same state definition as LinearScorer.
     # Keeping this small adapter here avoids making path serialization depend on
     # a scorer instance.
-    if extractor.spec.id in {"legacy_v1", "decomposed_v1"}:
-        return edge.token.pos
-    raise ValueError(f"unsupported feature specification: {extractor.spec.id!r}")
+    return state_key_function(extractor.spec)(edge)
 
 
 def feature_delta(
@@ -266,8 +427,18 @@ __all__ = [
     "FeatureSpec",
     "LEGACY_V1_SPEC",
     "DECOMPOSED_V1_SPEC",
+    "MATRIX_V1_SPEC",
+    "MATRIX_V1_POS_PAIRS_SPEC",
+    "FREQ_V1_SPEC",
+    "FREQ_V1_NO_IPADIC_SPEC",
+    "MATRIX_FREQ_V1_SPEC",
+    "TransitionState",
     "decomposed_v1_extractor",
+    "extractor_for",
     "feature_delta",
     "legacy_v1_extractor",
     "path_features",
+    "registered_spec_ids",
+    "resolve_spec",
+    "state_key_function",
 ]

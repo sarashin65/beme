@@ -23,6 +23,8 @@ DEFAULT_BEME_COST_CEILING = 5.25
 # IPADIC is an analysis dictionary: its katakana surfaces are valid inputs but
 # over-produced as IME outputs.  AJIMEE ablation selected this fixed P0 value.
 KATAKANA_SURFACE_COST_PENALTY = 1.0
+# Keep conditional reading probabilities on the raw IPADIC cost scale.
+READING_CONDITIONAL_TEMPERATURE = float(DEFAULT_RAW_COST_CEILING)
 
 
 @dataclass(frozen=True, slots=True)

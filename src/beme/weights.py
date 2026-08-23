@@ -101,14 +101,9 @@ class Weights(Mapping[str, float]):
         values = document.get("weights", {})
         if not isinstance(values, dict):
             raise ValueError("weights must be a JSON object")
-        from .features import FeatureSpec
+        from .features import resolve_spec
 
-        if feature_spec == "legacy_v1":
-            spec = FeatureSpec.legacy_v1()
-        elif feature_spec == "decomposed_v1":
-            spec = FeatureSpec.decomposed_v1()
-        else:
-            spec = FeatureSpec(feature_spec)
+        spec = resolve_spec(feature_spec)
         known = set(spec.lexical_features) | set(spec.transition_features)
         unknown = sorted(set(values) - known)
         if unknown and strict:
