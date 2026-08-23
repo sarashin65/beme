@@ -21,29 +21,26 @@ uv run python scripts/run_ablations.py --summarize-only --output-root artifacts/
 
 ## 2. Ablation Matrix Results
 
-> **本節の `McNemar p` 列と `label` 列は無効である（PR #14 レビュー指摘・未再集約）。**
-> 集約時の `run_ablations.py` は分割表を `(A0 の未学習 baseline) × (条件の learned)` で作っていた。task8-mission §3 が指定した `(A0 正/誤) × (条件 正/誤)` ではないため、この p 値は「学習が未学習ベースラインを動かしたか」の検定であり、条件と A0 の差の検定ではない。未学習ベースラインの document は全条件で同一なので、A0 と 1 件も違わない条件でも `significant_better` が出る。中央値 529 対 538 の A4 に p=4.7e-11 が付いているのはこのためである。
-> 集約コードは修正済み（`learned` 同士・同一 seed でのペアリング）だが、artifact は GPU マシンにのみ存在するため再集約していない。`--summarize-only` の再実行（**再学習は不要**）で `summary.json` を作り直し、本節・§9・§10 の判定を書き直すこと。
-> `test error median` と `min-max` は分割表と独立に `report.json` から読んだ値なので影響を受けない。
+> 初版の p 値・ラベルは、McNemar が A0 の未学習 baseline と比較していた不具合（`05911f1` で修正）により無効である。本表は修正後に `--summarize-only` を再実行して再集約した値であり、再学習は行っていない。
 
 `test error` は d1 test の `end_to_end_errors` で、3 seed の中央値と min-max を示す。
 
-| condition | spec | test error median | min-max | McNemar p | label |
-|---|---|---:|---:|---:|---|
-| A0 | `decomposed_v1` | 538 | 527-538 | n/a | `indeterminate` |
-| A1 | `decomposed_v1-lex_only` | 540 | 534-541 | 1.9402e-10 | `significant_worse` |
-| A2 | `decomposed_v1-trans_only` | 566 | 561-566 | 記録なし | `indeterminate` |
-| A3 | `decomposed_v1-no_ipadic_cost` | 588 | 587-602 | 7.6835e-14 | `significant_worse` |
-| A4 | `decomposed_v1-no_source` | 529 | 528-535 | 4.7239e-11 | `significant_better` |
-| A5 | `decomposed_v1-no_katakana` | 530 | 529-531 | 2.4437e-12 | `significant_better` |
-| A6 | `decomposed_v1-no_shape` | 520 | 519-522 | 5.0949e-21 | `significant_better` |
-| M0 | `decomposed_v1+matrix_v1` | 530 | 528-534 | 8.7322e-12 | `significant_better` |
-| M1 | `decomposed_v1+matrix_v1-pos_pairs` | 531 | 531-538 | 4.0515e-12 | `significant_better` |
-| F0 | `decomposed_v1+freq_v1` | 543 | 540-552 | 7.8401e-7 | `significant_worse` |
-| F1 | `decomposed_v1+freq_v1-no_ipadic_cost` | 589 | 588-592 | 0.0409457 | `significant_worse` |
-| X0 | `decomposed_v1+matrix_v1+freq_v1` | 534 | 533-538 | 3.4727e-9 | `significant_better` |
+| condition | spec | test error median | min-max | McNemar p (seed 9/17/33) | discordant (seed 9/17/33) | label |
+|---|---|---:|---:|---|---|---|
+| A0 | `decomposed_v1` | 538 | 527-538 | 1 / 1 / 1 | 0 / 0 / 0 | 基準 |
+| A1 | `decomposed_v1-lex_only` | 540 | 534-541 | .86 / .21 / .76 | 32 / 23 / 43 | `indeterminate` |
+| A2 | `decomposed_v1-trans_only` | 566 | 561-566 | — | — | `indeterminate`（縮退） |
+| A3 | `decomposed_v1-no_ipadic_cost` | 588 | 587-602 | 8.8e-34 / 1.8e-38 / 記録なし | 450 / 476 / 記録なし | `significant_worse` |
+| A4 | `decomposed_v1-no_source` | 529 | 528-535 | .71 / 1 / .08 | 29 / 15 / 21 | `indeterminate` |
+| A5 | `decomposed_v1-no_katakana` | 530 | 529-531 | .11 / .58 / .25 | 25 / 13 / 27 | `indeterminate` |
+| A6 | `decomposed_v1-no_shape` | 520 | 519-522 | .035 / .43 / .081 | 73 / 57 / 74 | `significant_better` |
+| M0 | `decomposed_v1+matrix_v1` | 530 | 528-534 | .26 / .19 / .08 | 38 / 21 / 26 | `indeterminate` |
+| M1 | `decomposed_v1+matrix_v1-pos_pairs` | 531 | 531-538 | .42 / .13 / .41 | 55 / 43 / 53 | `indeterminate` |
+| F0 | `decomposed_v1+freq_v1` | 543 | 540-552 | .050 / .049 / .51 | 44 / 37 / 37 | `indeterminate` |
+| F1 | `decomposed_v1+freq_v1-no_ipadic_cost` | 589 | 588-592 | 1.3e-7 / 8.8e-10 / 2.9e-7 | 86 / 109 / 95 | `significant_worse` |
+| X0 | `decomposed_v1+matrix_v1+freq_v1` | 534 | 533-538 | .90 / .40 / .67 | 58 / 36 / 48 | `indeterminate` |
 
-`indeterminate` は「差が無い」ではなく、d1 test 2,000 件では判別できないという意味である。McNemar は seed 9 の代表表と 3 seed の表を summary に記録した。不一致数が 25 以上の表は continuity-corrected chi-square を使っている。A2 は zero-cost の探索 collapse、A3 seed 33 は resource pressure により downstream artifact が欠けたため、McNemar の記録がない条件は `indeterminate` として扱った。
+`indeterminate` は「差が無い」ではなく、d1 test 2,000 件では判別できないという意味である。McNemar は修正後の learned A0 と各条件の learned を同一 seed で比較した。不一致数が 25 未満の表は exact binomial、それ以上は continuity-corrected chi-square を使っている。A2 は zero-cost の探索 collapse、A3 seed 33 は downstream artifact が欠けたため、該当 p 値・discordant は記録に含まれていない。
 
 既存 suite は採否判断に使っていない。handmade は 14 件で、1 件の変動が Top-1 を 7.1 pt 動かすためである。seed 9 の記録値は A0: handmade `13/14`、AJIMEE CER `0.2870918585668476`、Mozc `87/498`、X0: handmade `13/14`、AJIMEE CER `0.29239512203125634`、Mozc `89/498` である。A2 の suite evaluate は記録に含まれていない。
 
@@ -146,16 +143,16 @@ d1 JSONL が無い環境での audit だったため、d1 と評価データの 
 
 ## 9. Negative and Null Results
 
-- A1、A3、F0、F1 は A0 より test error 中央値が悪化した。記録された `significant_worse` は §2 の注記のとおり無効な分割表によるもので、再集約まで有意性は主張しない。A3 は downstream failure を含むため `indeterminate` と扱った記録もあり、欠損 artifact の制約を併記する。
+- A3 と F1 は `significant_worse`。A1 は indeterminate、F0 も境界的な p 値（2/3 seed が約 .05）で indeterminate である。
 - A2 は transition-only の zero-cost tie collapse が起き、AJIMEE evaluate は候補空/探索長時間化で完走しなかった。これは想定された縮退下限であり、推測値を補っていない。
-- A4/A5/A6/M0/M1/X0 は A0 より test error 中央値が良い。記録された `significant_better` は §2 の注記のとおり無効なので、再集約まで「有意に改善」とは書かない。とくに差が 8〜9 件の A4/A5 は再集約で `indeterminate` になり得る。既存 suite の小標本値は採否根拠にしていない。
+- A6 のみ `significant_better`（seed 9 の p=.035、seed 17/33 は p≥.05）。A4/A5/M0/M1/X0 は中央値の方向は改善だが indeterminate であり、2,000 件では判別できない。既存 suite の小標本値は採否根拠にしていない。
 - F2（Wikipedia corpus frequency）は実施していない。外部 corpus が無く、リーク監査を先に必要とするためである。
 - 実リランカを使った `viterbi_weight` の実較正も実施していない。実モデルは GPU 側に無く、Phase 4 scope である。
 - Task 8 後の A2/A3 rerun では A2 3 seed と A3 seed 33 の downstream artifact が欠けた。記録された failed 一覧は summary の `failed` を正本とし、欠損を成功値として扱っていない。
 
 ## 10. Limitations and Phase 4 Handoff
 
-1. 局所モデルの第一候補は X0、対照は A0 とする。ただし X0 の判定は §2 の注記により保留（中央値 534 対 538）であり、A2/A3 の collapse と d1 complete audit 不在も考慮する。再集約の結果しだいでは第一候補を選び直す。
+1. X0 は indeterminate であるため、PLAN §11.1 のルールに従い、単純な A0 を既定とする。A6（shape 除去・significant_better・モデルも単純）を候補として Phase 4 で検討する。matrix cost の M0/M1 は方向は改善だが 2,000 件では判別できない。A2/A3 の collapse と d1 complete audit 不在も考慮する。
 2. surface recall 曲線は d1 artifact の `beam_width=64` 結果を使う。A0 は learned `.731` at 1 / `1.0` at 64、X0 は `.731` at 1 / `1.0` at 64 だった。頭打ちの正確な unique-surface 分布は記録に含まれていないため、rerank_k をこのレポートだけから決めない。
 3. A0 seed 9 の cost-scale ratio は `.2540704446070626`、従って初期 `viterbi_weight` は `3.9359162831653594`。実リランカで再較正する。
 4. `cascade_threshold` は現状 gate ではない。Phase 4 で実際のカスケード gate として配線するか判断する。
