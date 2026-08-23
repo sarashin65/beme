@@ -21,7 +21,8 @@ uv run python scripts/run_ablations.py --summarize-only --output-root artifacts/
 
 ## 2. Ablation Matrix Results
 
-> 初版の p 値・ラベルは、McNemar が A0 の未学習 baseline と比較していた不具合（`05911f1` で修正）により無効である。本表は修正後に `--summarize-only` を再実行して再集約した値であり、再学習は行っていない。
+> 初版の p 値・ラベルは、McNemar が A0 の未学習 baseline と比較していた不具合（`05911f1` で修正）により無効である。本表の p 値と discordant は修正後に `--summarize-only` を再実行して再集約した値であり、再学習は行っていない。
+> ラベルはさらに、代表 seed 1 本ではなく**記録された全 seed が p<0.05**であることを要求する規則（PR #14 のレビュー指摘で変更）へ差し替えた。この規則変更で動いたのは A6 のみである（`significant_better` → `indeterminate`）。表中の p 値・discordant は再集約時のまま変わっていない。
 
 `test error` は d1 test の `end_to_end_errors` で、3 seed の中央値と min-max を示す。
 
@@ -33,14 +34,18 @@ uv run python scripts/run_ablations.py --summarize-only --output-root artifacts/
 | A3 | `decomposed_v1-no_ipadic_cost` | 588 | 587-602 | 8.8e-34 / 1.8e-38 / 記録なし | 450 / 476 / 記録なし | `significant_worse` |
 | A4 | `decomposed_v1-no_source` | 529 | 528-535 | .71 / 1 / .08 | 29 / 15 / 21 | `indeterminate` |
 | A5 | `decomposed_v1-no_katakana` | 530 | 529-531 | .11 / .58 / .25 | 25 / 13 / 27 | `indeterminate` |
-| A6 | `decomposed_v1-no_shape` | 520 | 519-522 | .035 / .43 / .081 | 73 / 57 / 74 | `significant_better` |
+| A6 | `decomposed_v1-no_shape` | 520 | 519-522 | .035 / .43 / .081 | 73 / 57 / 74 | `indeterminate` |
 | M0 | `decomposed_v1+matrix_v1` | 530 | 528-534 | .26 / .19 / .08 | 38 / 21 / 26 | `indeterminate` |
 | M1 | `decomposed_v1+matrix_v1-pos_pairs` | 531 | 531-538 | .42 / .13 / .41 | 55 / 43 / 53 | `indeterminate` |
 | F0 | `decomposed_v1+freq_v1` | 543 | 540-552 | .050 / .049 / .51 | 44 / 37 / 37 | `indeterminate` |
 | F1 | `decomposed_v1+freq_v1-no_ipadic_cost` | 589 | 588-592 | 1.3e-7 / 8.8e-10 / 2.9e-7 | 86 / 109 / 95 | `significant_worse` |
 | X0 | `decomposed_v1+matrix_v1+freq_v1` | 534 | 533-538 | .90 / .40 / .67 | 58 / 36 / 48 | `indeterminate` |
 
-`indeterminate` は「差が無い」ではなく、d1 test 2,000 件では判別できないという意味である。McNemar は修正後の learned A0 と各条件の learned を同一 seed で比較した。不一致数が 25 未満の表は exact binomial、それ以上は continuity-corrected chi-square を使っている。A2 は zero-cost の探索 collapse、A3 seed 33 は downstream artifact が欠けたため、該当 p 値・discordant は記録に含まれていない。
+`indeterminate` は「差が無い」ではなく、d1 test 2,000 件では判別できないという意味である。McNemar は修正後の learned A0 と各条件の learned を同一 seed で比較した。不一致数が 25 未満の表は exact binomial、それ以上は continuity-corrected chi-square を使っている。A2 は zero-cost の探索 collapse、A3 seed 33 は downstream artifact が欠けたため、該当 p 値・discordant は記録に含まれていない。A3 のラベルは記録のある 2 seed に基づく。
+
+ラベルは**最も弱い seed** で決めている。seed 間で変わるのはサンプルではなくモデルなので、3 seed 中 1 つでしか見えない差はその条件が再現する差ではない。3 seed の分割表を合算しないのも同じ理由で、同じ test 2,000 件を 3 回数えることになり対応データの独立性が壊れる。この規則により A6 は `indeterminate` である（seed 9 の p=.035 に対し seed 17 は .43、seed 33 は .081）。加えて本節は 11 条件 × 3 seed = 33 回の検定であり多重比較の補正をしていない。条件数 11 だけで補正しても閾値は約 .0045 なので、単独条件の .05 直下の p を強い証拠として読んではならない。判別できたのは A3 と F1 の悪化だけである。
+
+`test error median` と `min-max` は `report.json` の `end_to_end_errors`、McNemar の分割表は `diagnose_d1.json` の converter top-1 正誤であり、測定が異なる。11 条件では両者が一致するが、A3 だけ乖離する。A3 の p 値は §4 の learned surface recall@1 `.602`（誤り 796 件）と A0 の 538 件との 258 件差を検定しており、中央値列の 588 対 538 の 50 件差ではない。方向は同じなのでラベルは変わらないが、A3 の 2 指標が 208 件乖離する理由は artifact から特定できておらず、未解決事項として §10 に記す。
 
 既存 suite は採否判断に使っていない。handmade は 14 件で、1 件の変動が Top-1 を 7.1 pt 動かすためである。seed 9 の記録値は A0: handmade `13/14`、AJIMEE CER `0.2870918585668476`、Mozc `87/498`、X0: handmade `13/14`、AJIMEE CER `0.29239512203125634`、Mozc `89/498` である。A2 の suite evaluate は記録に含まれていない。
 
@@ -143,21 +148,24 @@ d1 JSONL が無い環境での audit だったため、d1 と評価データの 
 
 ## 9. Negative and Null Results
 
-- A3 と F1 は `significant_worse`。A1 は indeterminate、F0 も境界的な p 値（2/3 seed が約 .05）で indeterminate である。
+- A3 と F1 は `significant_worse`。A1 は indeterminate、F0 も境界的な p 値（seed 9 が .050、seed 17 が .049、seed 33 が .51）で indeterminate である。F0 のラベルは .05 のすぐ両側に 2 seed が並ぶため、しきい値の位置に依存する。
 - A2 は transition-only の zero-cost tie collapse が起き、AJIMEE evaluate は候補空/探索長時間化で完走しなかった。これは想定された縮退下限であり、推測値を補っていない。
-- A6 のみ `significant_better`（seed 9 の p=.035、seed 17/33 は p≥.05）。A4/A5/M0/M1/X0 は中央値の方向は改善だが indeterminate であり、2,000 件では判別できない。既存 suite の小標本値は採否根拠にしていない。
+- **改善側で有意と言える条件は 1 つも無い。** A6 は 3 seed 中 seed 9 のみ p=.035（seed 17 は .43、seed 33 は .081）で、全 seed 一致を要求する規則では indeterminate である。33 回の検定に対して補正もしていないため、この p を改善の証拠として扱わない。A4/A5/M0/M1/X0 も中央値の方向は改善だが indeterminate であり、2,000 件では判別できない。既存 suite の小標本値は採否根拠にしていない。
+- 従って Phase 3 で判別できたのは **A3（IPADIC word cost の除去）と F1（頻度による word cost の代替）が悪化させること** だけである。「どの特徴を足せば良くなるか」については、この標本サイズでは何も言えていない。
 - F2（Wikipedia corpus frequency）は実施していない。外部 corpus が無く、リーク監査を先に必要とするためである。
 - 実リランカを使った `viterbi_weight` の実較正も実施していない。実モデルは GPU 側に無く、Phase 4 scope である。
 - Task 8 後の A2/A3 rerun では A2 3 seed と A3 seed 33 の downstream artifact が欠けた。記録された failed 一覧は summary の `failed` を正本とし、欠損を成功値として扱っていない。
 
 ## 10. Limitations and Phase 4 Handoff
 
-1. X0 は indeterminate であるため、PLAN §11.1 のルールに従い、単純な A0 を既定とする。A6（shape 除去・significant_better・モデルも単純）を候補として Phase 4 で検討する。matrix cost の M0/M1 は方向は改善だが 2,000 件では判別できない。A2/A3 の collapse と d1 complete audit 不在も考慮する。
-2. surface recall 曲線は d1 artifact の `beam_width=64` 結果を使う。A0 は learned `.731` at 1 / `1.0` at 64、X0 は `.731` at 1 / `1.0` at 64 だった。頭打ちの正確な unique-surface 分布は記録に含まれていないため、rerank_k をこのレポートだけから決めない。
-3. A0 seed 9 の cost-scale ratio は `.2540704446070626`、従って初期 `viterbi_weight` は `3.9359162831653594`。実リランカで再較正する。
-4. `cascade_threshold` は現状 gate ではない。Phase 4 で実際のカスケード gate として配線するか判断する。
-5. reading length 1-3、numeric true、contrast pair true、proper noun true などの層別値は d1 test A0 artifact の弱点候補である。span_tokens/contrast は品質そのものではなく代理指標である。
-6. leakage audit は d1 JSONL 不在のため完全検証されていない。GPU 側の完全監査を実施してから評価データへの非リークを主張する。
-7. package-data の結論は Phase 3 の scope 外であり、学習済み weights は外部 path 必須と明示する。package-data は `legacy_v1.json` と `decomposed_v1.json` のみに限定する方針を Phase 4 に引き継ぐ。
-8. feature spec v2 では `lex.reading_len` の削除、script/transition 共線性の解消、高 cardinality 語彙特徴、外部疎 weights を検討する。
-9. matrix cost は位置非依存なので Phase 3 では `LatticePath` を再設計していない。位置依存特徴を追加する場合は、`LinearScorer._edge_cache` の token key と path の位置保持を同時に再設計する。
+1. 改善側の条件がすべて indeterminate であるため、PLAN §11.1 のルールに従い **A0 を既定とする**。A6/M0/M1/X0 はいずれも中央値の方向は改善だが判別できていないので、優劣を根拠に選ばない。A2/A3 の collapse と d1 complete audit 不在も考慮する。
+2. 改善側を判別するには標本を増やすしかない。A6 の seed 9 の効果量（2,000 件で 18〜19 件・discordant 73）を再現性のあるものとして確認したいなら、d1 test の拡張か、複数 seed をまたいで安定する評価設計が Phase 4 の前提になる。
+3. **未解決**: A3 だけ `end_to_end_errors`（588）と diagnose の converter top-1 誤り（796）が 208 件乖離している（§2 末尾）。他 11 条件では一致するため A3 固有の現象であり、探索 collapse 下で `evaluate_test` と `diagnose_cases` の測定条件が食い違っている可能性がある。artifact で特定すること。
+4. surface recall 曲線は d1 artifact の `beam_width=64` 結果を使う。A0 は learned `.731` at 1 / `1.0` at 64、X0 は `.731` at 1 / `1.0` at 64 だった。頭打ちの正確な unique-surface 分布は記録に含まれていないため、rerank_k をこのレポートだけから決めない。
+5. A0 seed 9 の cost-scale ratio は `.2540704446070626`、従って初期 `viterbi_weight` は `3.9359162831653594`。実リランカで再較正する。
+6. `cascade_threshold` は現状 gate ではない。Phase 4 で実際のカスケード gate として配線するか判断する。
+7. reading length 1-3、numeric true、contrast pair true、proper noun true などの層別値は d1 test A0 artifact の弱点候補である。span_tokens/contrast は品質そのものではなく代理指標である。
+8. leakage audit は d1 JSONL 不在のため完全検証されていない。GPU 側の完全監査を実施してから評価データへの非リークを主張する。
+9. package-data の結論は Phase 3 の scope 外であり、学習済み weights は外部 path 必須と明示する。package-data は `legacy_v1.json` と `decomposed_v1.json` のみに限定する方針を Phase 4 に引き継ぐ。
+10. feature spec v2 では `lex.reading_len` の削除、script/transition 共線性の解消、高 cardinality 語彙特徴、外部疎 weights を検討する。
+11. matrix cost は位置非依存なので Phase 3 では `LatticePath` を再設計していない。位置依存特徴を追加する場合は、`LinearScorer._edge_cache` の token key と path の位置保持を同時に再設計する。

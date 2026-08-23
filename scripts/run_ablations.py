@@ -160,16 +160,18 @@ def summarize_only(root: Path) -> dict[str, Any]:
     a0_errors = conditions.get("A0", {}).get("test_end_to_end_errors", {}).get("median")
     for condition, value in conditions.items():
         median = value["test_end_to_end_errors"]["median"]
-        # The representative table is the first requested seed, addressed by
-        # seed rather than by position so it cannot silently become another
-        # seed's table when one run is missing.
-        representative = next((item for item in value["mcnemar"] if item["seed"] == SEEDS[0]), None)
-        table = representative["table"] if representative else None
+        # Every recorded seed must clear the threshold, not one representative
+        # seed: what changes between seeds is the model, not the sample, so a
+        # difference only one seed of three can see is not one the condition
+        # reproduces.  The weakest seed is what the label rests on, so it is
+        # recorded next to it.
+        p_values = [item["table"]["p_value"] for item in value["mcnemar"]]
+        weakest = max(p_values) if p_values else None
         if condition == "A0":
             # A0 against itself is b = c = 0 by construction; the label is
             # stated rather than derived so the self-comparison is explicit.
             label = "indeterminate"
-        elif table is None or a0_errors is None or table["p_value"] >= 0.05:
+        elif weakest is None or a0_errors is None or weakest >= 0.05:
             label = "indeterminate"
         elif median == a0_errors:
             # A significant table with no median difference does not order the
@@ -180,6 +182,13 @@ def summarize_only(root: Path) -> dict[str, Any]:
         else:
             label = "significant_better"
         value["decision_label"] = label
+        value["decision"] = {
+            "label": label,
+            "rule": "every recorded seed p < 0.05 and the median differs",
+            "seeds_compared": len(p_values),
+            "max_p_value": weakest,
+            "min_p_value": min(p_values) if p_values else None,
+        }
     return {
         "conditions": conditions,
         "completed_conditions": available,
@@ -188,6 +197,8 @@ def summarize_only(root: Path) -> dict[str, Any]:
         "interpretation_notes": {
             "decision_basis": "d1 test McNemar result and end-to-end error median; suite metrics are descriptive only",
             "mcnemar_comparison": "learned condition against learned A0 on the same seed; b = A0 correct and condition wrong, c = the reverse",
+            "seed_agreement": "a label requires every recorded seed to clear p < 0.05; one seed out of three is not a reproducible difference, and the tables must not be pooled because every seed scores the same 2,000 test items",
+            "multiple_comparisons": "one test per condition per seed, with no correction applied; a p just under 0.05 on a single condition is within chance for this many tests",
             "linear_dependency": "lex.script.* and trans.* both count one token per path, so raw weights are not feature importance",
             "reading_length": "lex.reading_len is structurally constant for a reading and is not learned",
             "transition_only": "A2 tie-heavy one-token behavior is an expected ablation lower bound, not an error",

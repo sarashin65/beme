@@ -139,3 +139,57 @@ def test_equal_medians_are_indeterminate_even_when_the_table_is_significant(tmp_
     assert (table["b"], table["c"]) == (30, 10)
     assert table["p_value"] < 0.05
     assert summary["conditions"]["A1"]["decision_label"] == "indeterminate"
+
+
+def _significant_cases(baseline_correct: int, learned_correct: int, moved_wrong: int, moved_right: int) -> list[dict]:
+    """A0-learned-correct block of `learned_correct`, then move cases each way."""
+    cases = _cases(baseline_correct, learned_correct)
+    for index in range(moved_wrong):
+        cases[index]["learned"]["correct"] = False
+    for index in range(learned_correct, learned_correct + moved_right):
+        cases[index]["learned"]["correct"] = True
+    return cases
+
+
+def test_one_significant_seed_out_of_three_is_not_a_label(tmp_path: Path) -> None:
+    """A difference only one seed can see is not one the condition reproduces."""
+    value = module()
+    for seed in value.SEEDS:
+        _artifacts(tmp_path, "A0", seed, _cases(50, 80), 20)
+    # seed 9 moves 30 cases one way (significant); the other two barely move.
+    _artifacts(tmp_path, "A1", value.SEEDS[0], _significant_cases(50, 80, 30, 0), 10)
+    for seed in value.SEEDS[1:]:
+        _artifacts(tmp_path, "A1", seed, _significant_cases(50, 80, 1, 0), 10)
+    summary = value.summarize_only(tmp_path)
+    decision = summary["conditions"]["A1"]["decision"]
+    assert [round(item["table"]["p_value"], 3) for item in summary["conditions"]["A1"]["mcnemar"]][0] < 0.05
+    assert decision["max_p_value"] >= 0.05
+    assert decision["seeds_compared"] == 3
+    assert decision["label"] == "indeterminate"
+    assert summary["conditions"]["A1"]["decision_label"] == "indeterminate"
+
+
+def test_all_seeds_significant_and_the_median_agrees_gives_a_label(tmp_path: Path) -> None:
+    value = module()
+    for seed in value.SEEDS:
+        _artifacts(tmp_path, "A0", seed, _cases(50, 80), 20)
+        _artifacts(tmp_path, "A1", seed, _significant_cases(50, 80, 30, 0), 50)
+    summary = value.summarize_only(tmp_path)
+    decision = summary["conditions"]["A1"]["decision"]
+    assert decision["max_p_value"] < 0.05
+    assert decision["label"] == "significant_worse"
+
+
+def test_a_label_may_rest_on_fewer_seeds_but_records_how_many(tmp_path: Path) -> None:
+    """A3 lost one seed's artifact; the label must say what it rests on."""
+    value = module()
+    for seed in value.SEEDS:
+        _artifacts(tmp_path, "A0", seed, _cases(50, 80), 20)
+    for seed in value.SEEDS:
+        cases = _significant_cases(50, 80, 30, 0)
+        _artifacts(tmp_path, "A1", seed, cases, 50)
+    (tmp_path / "A1" / f"seed{value.SEEDS[2]}" / "diagnose_d1.json").unlink()
+    summary = value.summarize_only(tmp_path)
+    decision = summary["conditions"]["A1"]["decision"]
+    assert decision["seeds_compared"] == 2
+    assert decision["label"] == "significant_worse"
