@@ -203,7 +203,10 @@ def evaluate_ajimee(
             cascade_threshold=cascade_threshold,
             preceding_context=case.context,
         )
-        hypothesis = candidates[0].surface
+        # Degenerate ablations can legitimately return no candidates. Treat
+        # that as an empty hypothesis so evaluation records the error instead
+        # of aborting the whole suite; normal conditions are unchanged.
+        hypothesis = candidates[0].surface if candidates else ""
         distances = [edit_distance(reference, hypothesis) for reference in case.references]
         cers = [distance / len(reference) for distance, reference in zip(distances, case.references)]
         minimum_distance = min(distances)

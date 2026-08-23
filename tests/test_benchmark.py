@@ -80,6 +80,21 @@ def test_ajimee_uses_best_permitted_reference(tmp_path: Path) -> None:
     assert report["per_case"][0]["normalized_input"] == "かけい"
 
 
+def test_ajimee_empty_candidates_are_scored_as_empty_hypothesis() -> None:
+    class EmptyConverter:
+        def convert(self, *args: object, **kwargs: object):
+            return type("Result", (), {"candidates": ()})()
+
+    report = evaluate_ajimee(
+        EmptyConverter(),
+        [AjimeeCase("empty", "", "カケイ", ("家計",))],
+    )
+
+    assert report["case_count"] == 1
+    assert report["per_case"][0]["hypothesis"] == ""
+    assert report["exact_match_accuracy"] == 0.0
+
+
 def test_mozc_conversion_commands_and_suggestion_skip(tmp_path: Path) -> None:
     dictionary = write_dictionary(
         tmp_path,
