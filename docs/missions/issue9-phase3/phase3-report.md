@@ -45,7 +45,7 @@ uv run python scripts/run_ablations.py --summarize-only --output-root artifacts/
 
 ラベルは**最も弱い seed** で決めている。seed 間で変わるのはサンプルではなくモデルなので、3 seed 中 1 つでしか見えない差はその条件が再現する差ではない。3 seed の分割表を合算しないのも同じ理由で、同じ test 2,000 件を 3 回数えることになり対応データの独立性が壊れる。この規則により A6 は `indeterminate` である（seed 9 の p=.035 に対し seed 17 は .43、seed 33 は .081）。加えて本節は 11 条件 × 3 seed = 33 回の検定であり多重比較の補正をしていない。条件数 11 だけで補正しても閾値は約 .0045 なので、単独条件の .05 直下の p を強い証拠として読んではならない。判別できたのは A3 と F1 の悪化だけである。
 
-`test error median` と `min-max` は `report.json` の `end_to_end_errors`、McNemar の分割表は `diagnose_d1.json` の converter top-1 正誤であり、測定が異なる。11 条件では両者が一致するが、A3 だけ乖離する。A3 の p 値は §4 の learned surface recall@1 `.602`（誤り 796 件）と A0 の 538 件との 258 件差を検定しており、中央値列の 588 対 538 の 50 件差ではない。方向は同じなのでラベルは変わらないが、A3 の 2 指標が 208 件乖離する理由は artifact から特定できておらず、未解決事項として §10 に記す。
+`test error median` と `min-max` は `report.json` の `end_to_end_errors`、McNemar の分割表は `diagnose_d1.json` の converter top-1 正誤であり、測定が異なる。通常モデルでは正解経路が厳密に最安になるため両者は一致する（他 11 条件で一致を確認済み）。A3（`decomposed_v1-no_ipadic_cost`）だけ、`end_to_end_errors`（約 588）と diagnose の converter top-1 誤り（約 796）が 208 件乖離する。`training.py:100` の `evaluate_split` は `k_best_viterbi(lattice, beam_width=1)` の 1-best 経路の surface と gold を比較する一方、`diagnose_cases.py:236-244` は `Converter(dictionary, beam_width=64)` で K=64 経路を取り、表面 dedup と cost sort 後の top-1 surface を比較する。A3 は IPADIC cost を除去した縮退モデルでラティス上の全経路がほぼ同コストとなり、K=1 の `_path_key` タイブレークと K=64 + surface dedup 後の順序が同コスト経路間で異なるため、別表記になり得る。従って McNemar の p 値は `796 対 538` を、中央値列は `588 対 538` を比較している。方向は同じで、A3 が A0 より悪いというラベルは変わらない。
 
 既存 suite は採否判断に使っていない。handmade は 14 件で、1 件の変動が Top-1 を 7.1 pt 動かすためである。seed 9 の記録値は A0: handmade `13/14`、AJIMEE CER `0.2870918585668476`、Mozc `87/498`、X0: handmade `13/14`、AJIMEE CER `0.29239512203125634`、Mozc `89/498` である。A2 の suite evaluate は記録に含まれていない。
 
@@ -160,7 +160,7 @@ d1 JSONL が無い環境での audit だったため、d1 と評価データの 
 
 1. 改善側の条件がすべて indeterminate であるため、PLAN §11.1 のルールに従い **A0 を既定とする**。A6/M0/M1/X0 はいずれも中央値の方向は改善だが判別できていないので、優劣を根拠に選ばない。A2/A3 の collapse と d1 complete audit 不在も考慮する。
 2. 改善側を判別するには標本を増やすしかない。A6 の seed 9 の効果量（2,000 件で 18〜19 件・discordant 73）を再現性のあるものとして確認したいなら、d1 test の拡張か、複数 seed をまたいで安定する評価設計が Phase 4 の前提になる。
-3. **未解決**: A3 だけ `end_to_end_errors`（588）と diagnose の converter top-1 誤り（796）が 208 件乖離している（§2 末尾）。他 11 条件では一致するため A3 固有の現象であり、探索 collapse 下で `evaluate_test` と `diagnose_cases` の測定条件が食い違っている可能性がある。artifact で特定すること。
+3. **解決済み**: A3 の `end_to_end_errors`（588）と diagnose の converter top-1 誤り（796）の 208 件差は、`evaluate_split` の K=1 経路と `diagnose_cases` の K=64 + surface dedup 経路の測定条件が、A3 のほぼ同コストの縮退で異なるために生じる。これは重みパスの誤りではない。他 11 条件では両測定が一致している。
 4. surface recall 曲線は d1 artifact の `beam_width=64` 結果を使う。A0 は learned `.731` at 1 / `1.0` at 64、X0 は `.731` at 1 / `1.0` at 64 だった。頭打ちの正確な unique-surface 分布は記録に含まれていないため、rerank_k をこのレポートだけから決めない。
 5. A0 seed 9 の cost-scale ratio は `.2540704446070626`、従って初期 `viterbi_weight` は `3.9359162831653594`。実リランカで再較正する。
 6. `cascade_threshold` は現状 gate ではない。Phase 4 で実際のカスケード gate として配線するか判断する。
