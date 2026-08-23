@@ -505,6 +505,93 @@ def k_best_viterbi(
     return tuple(results)
 
 
+TOP1_MAX_TIE_PROBE = 4096
+top1_probe_limit_hits = 0
+
+
+def _minimum_cost_paths(
+    lattice: Lattice, scorer: Scorer, limit: int
+) -> tuple[tuple[LatticePath, ...], bool]:
+    """Return terminal paths tied at the minimum cost, up to ``limit``.
+
+    This is the same A* traversal as :func:`k_best_viterbi`, but it stops as
+    soon as the first terminal cost is known and the heap can no longer yield
+    another path at that cost.  In particular, the common non-tied case needs
+    only the first terminal pop.
+    """
+
+    remaining = backward_costs_by_state(lattice, scorer)
+    if not remaining or math.isinf(remaining[0].get(None, math.inf)):
+        return tuple(), False
+
+    sequence = count()
+    queue: list[tuple[float, float, int, int, LatticePath]] = []
+    root = LatticePath(0.0)
+    heapq.heappush(queue, (remaining[0][None], 0.0, next(sequence), 0, root))
+    terminal = len(lattice.nodes) - 1
+    results: list[LatticePath] = []
+    best_cost: float | None = None
+    max_pops = 200 * limit * len(lattice.nodes)
+    pops = 0
+
+    while queue and len(results) < limit:
+        if best_cost is not None and queue[0][0] > best_cost:
+            break
+        _, _, _, position, path = heapq.heappop(queue)
+        pops += 1
+        if pops > max_pops:
+            break
+        if position == terminal:
+            if best_cost is None:
+                best_cost = path.cost
+            if path.cost == best_cost:
+                results.append(path)
+            continue
+
+        previous_state = path.state
+        for edge in lattice.nodes[position].edges:
+            edge_state = scorer.state_key(edge)
+            after_edge = remaining[edge.end].get(edge_state, math.inf)
+            if math.isinf(after_edge):
+                continue
+            cost = path.cost + scorer.edge_cost(edge) + scorer.transition_cost(previous_state, edge)
+            child = LatticePath(cost, edge.token, path, edge_state)
+            heapq.heappush(
+                queue,
+                (cost + after_edge, cost, next(sequence), edge.end, child),
+            )
+
+    return tuple(results), bool(queue and best_cost is not None and queue[0][0] == best_cost)
+
+
+def _top1_path(
+    lattice: Lattice, scorer: Scorer | None = None, *, tie_probe: int = 8
+) -> LatticePath | None:
+    if not isinstance(tie_probe, int) or isinstance(tie_probe, bool) or tie_probe <= 0:
+        raise ValueError("tie_probe must be a positive integer")
+    scorer = _resolve_scorer(scorer)
+    probe = min(tie_probe, TOP1_MAX_TIE_PROBE)
+    while True:
+        paths, possibly_truncated = _minimum_cost_paths(lattice, scorer, probe)
+        if not paths:
+            return None
+        if not possibly_truncated or probe >= TOP1_MAX_TIE_PROBE:
+            if possibly_truncated:
+                global top1_probe_limit_hits
+                top1_probe_limit_hits += 1
+            return min(paths, key=lambda path: (path.cost, path.surface))
+        probe = min(probe * 2, TOP1_MAX_TIE_PROBE)
+
+
+def top1_surface(
+    lattice: Lattice, scorer: Scorer | None = None, *, tie_probe: int = 8
+) -> str | None:
+    """Return the surface with minimum ``(cost, surface)`` among all paths."""
+
+    path = _top1_path(lattice, scorer, tie_probe=tie_probe)
+    return path.surface if path is not None else None
+
+
 viterbi_k_best = k_best_viterbi
 
 __all__ = [
@@ -520,6 +607,7 @@ __all__ = [
     "backward_costs_by_state",
     "backward_viterbi",
     "k_best_viterbi",
+    "top1_surface",
     "pos_transition_cost",
     "viterbi_k_best",
     "viterbi_backward",
