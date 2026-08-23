@@ -45,7 +45,13 @@ uv run python scripts/run_ablations.py --summarize-only --output-root artifacts/
 
 ラベルは**最も弱い seed** で決めている。seed 間で変わるのはサンプルではなくモデルなので、3 seed 中 1 つでしか見えない差はその条件が再現する差ではない。3 seed の分割表を合算しないのも同じ理由で、同じ test 2,000 件を 3 回数えることになり対応データの独立性が壊れる。この規則により A6 は `indeterminate` である（seed 9 の p=.035 に対し seed 17 は .43、seed 33 は .081）。加えて本節は 11 条件 × 3 seed = 33 回の検定であり多重比較の補正をしていない。条件数 11 だけで補正しても閾値は約 .0045 なので、単独条件の .05 直下の p を強い証拠として読んではならない。判別できたのは A3 と F1 の悪化だけである。
 
-`test error median` と `min-max` は `report.json` の `end_to_end_errors`、McNemar の分割表は `diagnose_d1.json` の converter top-1 正誤であり、測定が異なる。通常モデルでは正解経路が厳密に最安になるため両者は一致する（他 11 条件で一致を確認済み）。A3（`decomposed_v1-no_ipadic_cost`）だけ、`end_to_end_errors`（約 588）と diagnose の converter top-1 誤り（約 796）が 208 件乖離する。`training.py:100` の `evaluate_split` は `k_best_viterbi(lattice, beam_width=1)` の 1-best 経路の surface と gold を比較する一方、`diagnose_cases.py:236-244` は `Converter(dictionary, beam_width=64)` で K=64 経路を取り、表面 dedup と cost sort 後の top-1 surface を比較する。A3 は IPADIC cost を除去した縮退モデルでラティス上の全経路がほぼ同コストとなり、K=1 の `_path_key` タイブレークと K=64 + surface dedup 後の順序が同コスト経路間で異なるため、別表記になり得る。従って McNemar の p 値は `796 対 538` を、中央値列は `588 対 538` を比較している。方向は同じで、A3 が A0 より悪いというラベルは変わらない。
+`test error median` と `min-max` は `report.json` の `end_to_end_errors`、McNemar の分割表は `diagnose_d1.json` の converter top-1 正誤であり、測定が異なる。A3（`decomposed_v1-no_ipadic_cost`）だけ、`end_to_end_errors`（約 588）と diagnose の converter top-1 誤り（約 796）が 208 件乖離する。従って A3 の McNemar は `796 対 538`、中央値列は `588 対 538` を比較している。方向は同じで、A3 が A0 より悪いというラベルは変わらない。
+
+原因は**最安コストが同点になったときのタイブレークの違い**である。`training.py:100` の `evaluate_split` は `k_best_viterbi` の 1-best を取るが、`k_best_viterbi`（`lattice.py:467-497`）は A\* でヒープキーが `(f, g, 挿入カウンタ, position, path)` なので、同点の勝者は**辺の列挙順**で決まる。`diagnose_cases.py:236-244` の `Converter.convert`（`converter.py:169`）は表層 dedup 後に `(cost, surface)` で並べ直すので、同点の勝者は**表層の辞書式順**で決まる。A3 は IPADIC cost を除去した縮退モデルでラティス上の経路がほぼ同コストになるため、この 2 つのタイブレークが常に別表記を選ぶ。
+
+**beam 幅は原因ではない。** handmade 14 読みでの実測では、全重み 0 の縮退モデルで `k_best_viterbi` の top-1 は beam 1 / 2 / 4 / 64 のいずれでも同一であり、両指標の不一致は K=1 で 14/14、K=64 で 13/14 と変わらない。同じ測定で最安候補が同点になった読みは 14/14 だった。通常モデル（`decomposed_v1`）では同点が 0/14、不一致も 0/14 である。両者が一致するのは正解経路が最安だからではなく、**最安コストが同点にならないのでタイブレークの違いが表面化しないから**である。他 11 条件が一致するのも同じ理由と考えられる。
+
+従ってこれは K を揃えても解消しない。同点が発生すればどのモデルでも両指標はずれるので、両者を一致させたい場合は `k_best_viterbi` 側にも表層のタイブレークを入れるか、`evaluate_split` を converter 経由にする必要がある（§10）。
 
 既存 suite は採否判断に使っていない。handmade は 14 件で、1 件の変動が Top-1 を 7.1 pt 動かすためである。seed 9 の記録値は A0: handmade `13/14`、AJIMEE CER `0.2870918585668476`、Mozc `87/498`、X0: handmade `13/14`、AJIMEE CER `0.29239512203125634`、Mozc `89/498` である。A2 の suite evaluate は記録に含まれていない。
 
@@ -160,12 +166,13 @@ d1 JSONL が無い環境での audit だったため、d1 と評価データの 
 
 1. 改善側の条件がすべて indeterminate であるため、PLAN §11.1 のルールに従い **A0 を既定とする**。A6/M0/M1/X0 はいずれも中央値の方向は改善だが判別できていないので、優劣を根拠に選ばない。A2/A3 の collapse と d1 complete audit 不在も考慮する。
 2. 改善側を判別するには標本を増やすしかない。A6 の seed 9 の効果量（2,000 件で 18〜19 件・discordant 73）を再現性のあるものとして確認したいなら、d1 test の拡張か、複数 seed をまたいで安定する評価設計が Phase 4 の前提になる。
-3. **解決済み**: A3 の `end_to_end_errors`（588）と diagnose の converter top-1 誤り（796）の 208 件差は、`evaluate_split` の K=1 経路と `diagnose_cases` の K=64 + surface dedup 経路の測定条件が、A3 のほぼ同コストの縮退で異なるために生じる。これは重みパスの誤りではない。他 11 条件では両測定が一致している。
-4. surface recall 曲線は d1 artifact の `beam_width=64` 結果を使う。A0 は learned `.731` at 1 / `1.0` at 64、X0 は `.731` at 1 / `1.0` at 64 だった。頭打ちの正確な unique-surface 分布は記録に含まれていないため、rerank_k をこのレポートだけから決めない。
-5. A0 seed 9 の cost-scale ratio は `.2540704446070626`、従って初期 `viterbi_weight` は `3.9359162831653594`。実リランカで再較正する。
-6. `cascade_threshold` は現状 gate ではない。Phase 4 で実際のカスケード gate として配線するか判断する。
-7. reading length 1-3、numeric true、contrast pair true、proper noun true などの層別値は d1 test A0 artifact の弱点候補である。span_tokens/contrast は品質そのものではなく代理指標である。
-8. leakage audit は d1 JSONL 不在のため完全検証されていない。GPU 側の完全監査を実施してから評価データへの非リークを主張する。
-9. package-data の結論は Phase 3 の scope 外であり、学習済み weights は外部 path 必須と明示する。package-data は `legacy_v1.json` と `decomposed_v1.json` のみに限定する方針を Phase 4 に引き継ぐ。
-10. feature spec v2 では `lex.reading_len` の削除、script/transition 共線性の解消、高 cardinality 語彙特徴、外部疎 weights を検討する。
-11. matrix cost は位置非依存なので Phase 3 では `LatticePath` を再設計していない。位置依存特徴を追加する場合は、`LinearScorer._edge_cache` の token key と path の位置保持を同時に再設計する。
+3. **解決済み（原因特定）**: A3 の `end_to_end_errors`（588）と diagnose の converter top-1 誤り（796）の 208 件差は、最安コストが同点のときのタイブレークが `k_best_viterbi`（辺の列挙順）と `Converter.convert`（表層の辞書式順）で異なるために生じる（§2 末尾）。重みパスの誤りではない。beam 幅は原因ではなく、K を揃えても解消しない。他 11 条件で両測定が一致するのは同点が発生しないためである。
+4. **Phase 4 の検討事項**: 上記のタイブレーク差は縮退モデル固有ではなく、同点が出れば通常モデルでも表面化する。学習中の指標（`evaluate_split`）と成果物の指標（converter 経由）を突き合わせ続けるなら、`k_best_viterbi` に表層のタイブレークを入れるか、`evaluate_split` を converter 経由に寄せて 1 つの定義に統一する。
+5. surface recall 曲線は d1 artifact の `beam_width=64` 結果を使う。A0 は learned `.731` at 1 / `1.0` at 64、X0 は `.731` at 1 / `1.0` at 64 だった。頭打ちの正確な unique-surface 分布は記録に含まれていないため、rerank_k をこのレポートだけから決めない。
+6. A0 seed 9 の cost-scale ratio は `.2540704446070626`、従って初期 `viterbi_weight` は `3.9359162831653594`。実リランカで再較正する。
+7. `cascade_threshold` は現状 gate ではない。Phase 4 で実際のカスケード gate として配線するか判断する。
+8. reading length 1-3、numeric true、contrast pair true、proper noun true などの層別値は d1 test A0 artifact の弱点候補である。span_tokens/contrast は品質そのものではなく代理指標である。
+9. leakage audit は d1 JSONL 不在のため完全検証されていない。GPU 側の完全監査を実施してから評価データへの非リークを主張する。
+10. package-data の結論は Phase 3 の scope 外であり、学習済み weights は外部 path 必須と明示する。package-data は `legacy_v1.json` と `decomposed_v1.json` のみに限定する方針を Phase 4 に引き継ぐ。
+11. feature spec v2 では `lex.reading_len` の削除、script/transition 共線性の解消、高 cardinality 語彙特徴、外部疎 weights を検討する。
+12. matrix cost は位置非依存なので Phase 3 では `LatticePath` を再設計していない。位置依存特徴を追加する場合は、`LinearScorer._edge_cache` の token key と path の位置保持を同時に再設計する。
