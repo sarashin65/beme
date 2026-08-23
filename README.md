@@ -269,3 +269,36 @@ uv run python scripts/evaluate.py --suite all --reranker mock \
 - 確信度しきい値 2.0、LLM/Viterbi/Cross-Encoder 重み 1.0 は初期値です。今後は独立したホールドアウトデータで調整します。
 
 詳細な要件と Phase 1・Phase 2 の設計判断は `docs/spec.md` を参照してください。
+
+## Phase 3 評価とアブレーション
+
+Phase 3 は `decomposed_v1` を基準に、次の 12 条件を比較します。
+
+`A0=decomposed_v1`、`A1=decomposed_v1-lex_only`、`A2=decomposed_v1-trans_only`、`A3=decomposed_v1-no_ipadic_cost`、`A4=decomposed_v1-no_source`、`A5=decomposed_v1-no_katakana`、`A6=decomposed_v1-no_shape`、`M0=decomposed_v1+matrix_v1`、`M1=decomposed_v1+matrix_v1-pos_pairs`、`F0=decomposed_v1+freq_v1`、`F1=decomposed_v1+freq_v1-no_ipadic_cost`、`X0=decomposed_v1+matrix_v1+freq_v1`。
+
+補助測定とハーネスの確認:
+
+```bash
+uv run python scripts/build_ablation_weights.py --help
+uv run python scripts/build_matrix_table.py --help
+uv run python scripts/oracle_recall.py --help
+uv run python scripts/diagnose_cases.py --help
+uv run python scripts/audit_leakage.py --help
+uv run python scripts/measure_cost_scale.py --help
+uv run python scripts/run_ablations.py --help
+```
+
+IPADIC matrix table は `matrix.def` から一度だけ生成します。`ipadic` pip package に含まれるのは `matrix.bin` であり、`matrix.def` は含まれません。
+
+GPU マシンには d1 の学習 split が repo 外にあるため、学習は `beme-gpu` で行います。clone 後に `data/d1/{train,dev,test}.jsonl` を GPU 側の d1 実体へ配置し、次を実行します。
+
+```bash
+uv run python scripts/run_ablations.py --conditions A0 --seeds 9 \
+  --output-root artifacts/issue9-phase3
+uv run python scripts/run_ablations.py --jobs 6 \
+  --output-root artifacts/issue9-phase3
+uv run python scripts/run_ablations.py --summarize-only \
+  --output-root artifacts/issue9-phase3
+```
+
+詳細な実測値、未測定項目、A2/A3 の探索 collapse は [`docs/missions/issue9-phase3/phase3-report.md`](docs/missions/issue9-phase3/phase3-report.md) を参照してください。
