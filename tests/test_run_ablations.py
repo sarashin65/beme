@@ -28,6 +28,21 @@ def test_condition_table_and_mcnemar_methods() -> None:
     assert value.mcnemar(20, 10)["method"] == "continuity_corrected_chi_squared"
 
 
+def test_mcnemar_is_imported_from_rerank_stats_not_redefined() -> None:
+    """Regression for issue #9 Phase 4 review item 6.
+
+    Task 3 (issue #9 Phase 4) introduced src/beme/rerank_stats.py precisely so
+    the statistical decision logic would live in one tested place; this
+    ablation harness had its own byte-for-byte copy of `mcnemar` that never
+    got wired to it. Assert identity, not just matching output, so a future
+    edit to one cannot silently drift from the other again.
+    """
+    from beme.rerank_stats import mcnemar as shared_mcnemar
+
+    value = module()
+    assert value.mcnemar is shared_mcnemar
+
+
 @pytest.mark.parametrize(
     "b, c, expected, method",
     [

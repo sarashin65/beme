@@ -505,82 +505,140 @@ def k_best_viterbi(
     return tuple(results)
 
 
-TOP1_MAX_TIE_PROBE = 4096
-top1_probe_limit_hits = 0
+def _live_edges(
+    lattice: Lattice,
+    scorer: Scorer,
+    remaining: tuple[dict[Hashable | None, float], ...],
+    position: int,
+    state: Hashable | None,
+) -> list[LatticeEdge]:
+    """Return the edges out of ``position`` that continue a minimum-cost path.
 
-
-def _minimum_cost_paths(
-    lattice: Lattice, scorer: Scorer, limit: int
-) -> tuple[tuple[LatticePath, ...], bool]:
-    """Return terminal paths tied at the minimum cost, up to ``limit``.
-
-    This is the same A* traversal as :func:`k_best_viterbi`, but it stops as
-    soon as the first terminal cost is known and the heap can no longer yield
-    another path at that cost.  In particular, the common non-tied case needs
-    only the first terminal pop.
+    ``state`` is the scorer state of the edge entering ``position`` (``None``
+    at the lattice start), exactly the ``previous`` argument
+    :func:`backward_costs_by_state` used when it computed
+    ``remaining[position][state]``.  An edge is "live" precisely when
+    recomputing that same sum for it -- ``transition_cost(state, edge) +
+    edge_cost(edge) + remaining[edge.end][state_key(edge)]`` -- reproduces
+    ``remaining[position][state]``.  Because these are the exact same
+    operands in the exact same order that :func:`backward_costs_by_state`
+    summed to produce that minimum, the comparison reproduces the same float
+    bit pattern for the edge(s) that attained it, so no epsilon tolerance is
+    needed.
     """
 
-    remaining = backward_costs_by_state(lattice, scorer)
-    if not remaining or math.isinf(remaining[0].get(None, math.inf)):
-        return tuple(), False
-
-    sequence = count()
-    queue: list[tuple[float, float, int, int, LatticePath]] = []
-    root = LatticePath(0.0)
-    heapq.heappush(queue, (remaining[0][None], 0.0, next(sequence), 0, root))
-    terminal = len(lattice.nodes) - 1
-    results: list[LatticePath] = []
-    best_cost: float | None = None
-    max_pops = 200 * limit * len(lattice.nodes)
-    pops = 0
-
-    while queue and len(results) < limit:
-        if best_cost is not None and queue[0][0] > best_cost:
-            break
-        _, _, _, position, path = heapq.heappop(queue)
-        pops += 1
-        if pops > max_pops:
-            break
-        if position == terminal:
-            if best_cost is None:
-                best_cost = path.cost
-            if path.cost == best_cost:
-                results.append(path)
+    base = remaining[position].get(state, math.inf)
+    if math.isinf(base):
+        return []
+    live: list[LatticeEdge] = []
+    for edge in lattice.nodes[position].edges:
+        edge_state = scorer.state_key(edge)
+        after_edge = remaining[edge.end].get(edge_state, math.inf)
+        if math.isinf(after_edge):
             continue
+        total = scorer.transition_cost(state, edge) + scorer.edge_cost(edge) + after_edge
+        if total == base:
+            live.append(edge)
+    return live
 
-        previous_state = path.state
-        for edge in lattice.nodes[position].edges:
-            edge_state = scorer.state_key(edge)
-            after_edge = remaining[edge.end].get(edge_state, math.inf)
-            if math.isinf(after_edge):
-                continue
-            cost = path.cost + scorer.edge_cost(edge) + scorer.transition_cost(previous_state, edge)
-            child = LatticePath(cost, edge.token, path, edge_state)
-            heapq.heappush(
-                queue,
-                (cost + after_edge, cost, next(sequence), edge.end, child),
-            )
 
-    return tuple(results), bool(queue and best_cost is not None and queue[0][0] == best_cost)
+class _Top1Cursor:
+    """One candidate continuation in the :func:`_top1_path` frontier search.
+
+    ``path`` already includes ``edge`` as its most recently taken token;
+    ``offset`` is how many characters of ``edge.token.surface`` have been
+    matched against the other live cursors so far.
+    """
+
+    __slots__ = ("path", "edge", "offset")
+
+    def __init__(self, path: LatticePath, edge: LatticeEdge, offset: int) -> None:
+        self.path = path
+        self.edge = edge
+        self.offset = offset
 
 
 def _top1_path(
     lattice: Lattice, scorer: Scorer | None = None, *, tie_probe: int = 8
 ) -> LatticePath | None:
+    """Return the minimum ``(cost, surface)`` terminal path, if any.
+
+    Ties at the minimum cost are broken by finding the lexicographically
+    smallest surface directly, without enumerating tied paths.  A frontier of
+    cursors walks every minimum-cost edge in lockstep, one output character
+    at a time (see :func:`_live_edges`), keeping only the cursors that match
+    the smallest next character.  Each cursor carries a persistent
+    :class:`LatticePath` prefix, so the winner is returned exactly, not
+    reconstructed afterwards. As soon as any cursor reaches the terminal node
+    it wins outright: everything still alive at that point shares the exact
+    same prefix (by the per-round filter below) and has at least one more
+    character to contribute, and in Python/lexicographic order a string is
+    always less than any other string that has it as a proper prefix.
+
+    Because no tied path is ever fully enumerated, this stays cheap even
+    when many tokens tie exactly cost-for-cost (for example, an ablation
+    weight vector that zeroes lexical cost, where a naive enumeration of
+    tied full paths is combinatorial in the reading length). The search
+    visits each lattice edge at most once, so it costs
+    O(output length x number of minimum-cost edges).
+
+    ``tie_probe`` is accepted for backward compatibility with earlier
+    callers and is otherwise ignored: there is no longer a bounded probe, and
+    therefore no truncation case to signal.
+    """
+
     if not isinstance(tie_probe, int) or isinstance(tie_probe, bool) or tie_probe <= 0:
         raise ValueError("tie_probe must be a positive integer")
     scorer = _resolve_scorer(scorer)
-    probe = min(tie_probe, TOP1_MAX_TIE_PROBE)
+    remaining = backward_costs_by_state(lattice, scorer)
+    if not remaining or math.isinf(remaining[0].get(None, math.inf)):
+        return None
+
+    terminal = len(lattice.nodes) - 1
+
+    def spawn(position: int, state: Hashable | None, parent: LatticePath) -> list[_Top1Cursor]:
+        cursors = []
+        for edge in _live_edges(lattice, scorer, remaining, position, state):
+            cost = parent.cost + scorer.edge_cost(edge) + scorer.transition_cost(state, edge)
+            path = LatticePath(cost, edge.token, parent, scorer.state_key(edge))
+            cursors.append(_Top1Cursor(path, edge, 0))
+        return cursors
+
+    frontier = spawn(0, None, LatticePath(0.0))
     while True:
-        paths, possibly_truncated = _minimum_cost_paths(lattice, scorer, probe)
-        if not paths:
-            return None
-        if not possibly_truncated or probe >= TOP1_MAX_TIE_PROBE:
-            if possibly_truncated:
-                global top1_probe_limit_hits
-                top1_probe_limit_hits += 1
-            return min(paths, key=lambda path: (path.cost, path.surface))
-        probe = min(probe * 2, TOP1_MAX_TIE_PROBE)
+        # Expand every cursor sitting at a token boundary into its live
+        # continuation(s) (or detect that it has reached the terminal node),
+        # deduplicating cursors that different parents spawned onto the same
+        # edge: their futures are identical from here, so only one
+        # representative is kept.  This is what keeps the frontier bounded by
+        # the number of lattice edges instead of the number of tied paths.
+        expanded: list[_Top1Cursor] = []
+        seen_edges: set[LatticeEdge] = set()
+        for cursor in frontier:
+            surface = cursor.edge.token.surface
+            if cursor.offset < len(surface):
+                expanded.append(cursor)
+                continue
+            if cursor.edge.end == terminal:
+                return cursor.path
+            for child in spawn(cursor.edge.end, scorer.state_key(cursor.edge), cursor.path):
+                if child.edge not in seen_edges:
+                    seen_edges.add(child.edge)
+                    expanded.append(child)
+        if not expanded:
+            # remaining[0][None] was finite, so some minimum-cost prefix must
+            # always be extendable to the terminal node; reaching here would
+            # mean backward_costs_by_state and _live_edges disagree.
+            raise AssertionError("no minimum-cost path reached the terminal node")
+        frontier = expanded
+
+        min_char = min(cursor.edge.token.surface[cursor.offset] for cursor in frontier)
+        frontier = [
+            cursor for cursor in frontier
+            if cursor.edge.token.surface[cursor.offset] == min_char
+        ]
+        for cursor in frontier:
+            cursor.offset += 1
 
 
 def top1_surface(

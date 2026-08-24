@@ -176,7 +176,10 @@ def top1_from_scores(
 
 _FIXED_BUCKETS = {
     "contrast_pair": ("false", "true"),
-    "reading_length": ("1-3", "4-6", "7-10", "11-16"),
+    # "17+" is an overflow bucket: real readings are not capped at 16
+    # characters, and the fixed buckets below it must not raise just because
+    # a longer one showed up (issue #9 Phase 4 review item 7).
+    "reading_length": ("1-3", "4-6", "7-10", "11-16", "17+"),
     "proper_noun": ("false", "true"),
 }
 
@@ -193,7 +196,9 @@ def _stratum(record: Mapping[str, Any], axis: str) -> str:
         for bucket, low, high in (("1-3", 1, 3), ("4-6", 4, 6), ("7-10", 7, 10), ("11-16", 11, 16)):
             if low <= length <= high:
                 return bucket
-        raise ValueError("reading_length must be between 1 and 16")
+        if length >= 17:
+            return "17+"
+        raise ValueError("reading_length must be a positive integer")
     if axis == "span_tokens":
         value = record.get("span_tokens")
         if value is None:

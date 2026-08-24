@@ -129,6 +129,35 @@ def test_score_ties_use_cost_then_surface_and_null_relevance_keeps_order() -> No
     ) == "ん"
 
 
+def test_stratify_reading_length_has_an_overflow_bucket_past_sixteen() -> None:
+    """Regression for issue #9 Phase 4 review item 7.
+
+    `stratify(records, "reading_length")` used to raise for any reading
+    longer than 16 characters, aborting the entire stratification instead of
+    bucketing the outlier -- real readings are not capped at 16.
+    """
+
+    records = [
+        {"reading_length": 17, "before_correct": True, "after_correct": True},
+        {"reading_length": 40, "before_correct": False, "after_correct": True},
+    ]
+    layers = stratify(records, "reading_length")
+    assert set(layers) == {"1-3", "4-6", "7-10", "11-16", "17+"}
+    assert layers["17+"] == {
+        "n": 2, "before_error_rate": 0.5, "after_error_rate": 0.0, "low_support": True,
+    }
+    for empty_bucket in ("1-3", "4-6", "7-10", "11-16"):
+        assert layers[empty_bucket]["n"] == 0
+
+
+def test_stratify_still_rejects_a_non_positive_reading_length() -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        stratify(
+            [{"reading_length": 0, "before_correct": True, "after_correct": True}],
+            "reading_length",
+        )
+
+
 def test_stratify_emits_empty_fixed_layers_and_low_support() -> None:
     records = [{
         "reading_length": 2, "contrast_pair_id": "pair", "span_tokens": 1,

@@ -13,7 +13,7 @@ import socket
 import sys
 import tempfile
 from time import perf_counter
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -245,6 +245,10 @@ def _top1_stats(records: Sequence[dict[str, Any]], orders: dict[str, Sequence[di
     }
 
 
+def _passes_gate(record: Mapping[str, Any], gate: float | None) -> bool:
+    return gate is None or (record.get("confidence") is not None and record["confidence"] < gate)
+
+
 def combine_records(
     records: Sequence[dict[str, Any]],
     viterbi_weight: float,
@@ -255,13 +259,13 @@ def combine_records(
 ) -> dict[str, Any]:
     """Combine cached relevance scores without constructing or calling a ranker."""
 
-    selected = [
-        record for record in records
-        if gate is None or (record.get("confidence") is not None and record["confidence"] < gate)
-    ]
     orders: dict[str, Sequence[dict[str, Any]]] = {}
     for record in records:
-        should_rank = not record.get("context_empty", False) and (gate is None or record in selected)
+        # Was `record in selected` against a precomputed list built with the
+        # same predicate: an O(n) deep-dict scan per record (O(n**2) overall,
+        # 1.30s vs .17s at 2,000 x 64 in the issue #9 Phase 4 review), for a
+        # result that only ever depends on this record's own fields.
+        should_rank = not record.get("context_empty", False) and _passes_gate(record, gate)
         candidates = record["candidates"]
         if not should_rank:
             candidates = [{**candidate, "relevance": None} for candidate in candidates]
@@ -300,12 +304,30 @@ def combine_records(
             }
             for record in records
         ]),
-        "latency": {
-            "host": socket.gethostname(),
-            "total_seconds": sum(float(record.get("elapsed_seconds", 0.0)) for record in records),
-            "per_example_seconds": (sum(float(record.get("elapsed_seconds", 0.0)) for record in records) / len(records) if records else 0.0),
-            "per_candidate_seconds": (sum(float(record.get("elapsed_seconds", 0.0)) for record in records) / sum(len(record["candidates"]) for record in records) if records and sum(len(record["candidates"]) for record in records) else 0.0),
-        },
+    }
+
+
+def _score_latency(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize the ``score`` subcommand's per-example ``elapsed_seconds``.
+
+    This is a property of the cached score file, not of any one grid point:
+    every record's ``elapsed_seconds`` was measured once, while `score`
+    generated and (unless ``context_empty``) reranked its full beam_width
+    candidate set -- independent of whatever ``viterbi_weight``/``rerank_k``/
+    ``gate`` a later `combine` grid row evaluates. It used to be recomputed
+    identically inside every grid row, which read as if latency varied with
+    those parameters; it does not, so it is reported once per score file
+    instead (issue #9 Phase 4 review item 4).
+    """
+
+    total = sum(float(record.get("elapsed_seconds", 0.0)) for record in records)
+    candidates = sum(len(record["candidates"]) for record in records)
+    return {
+        "host": socket.gethostname(),
+        "scope": "one score run's full beam_width candidate generation (and, unless context_empty, reranker scoring); independent of any combine grid row's rerank_k/gate",
+        "total_seconds": total,
+        "per_example_seconds": total / len(records) if records else 0.0,
+        "per_candidate_seconds": total / candidates if candidates else 0.0,
     }
 
 
@@ -341,21 +363,38 @@ def run_score(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_combine(args: argparse.Namespace) -> int:
-    provenance, records = _read_scores(args.scores[0])
-    if len(args.scores) > 1:
-        for path in args.scores[1:]:
-            other_provenance, other_records = _read_scores(path)
-            if [record["id"] for record in other_records] != [record["id"] for record in records]:
-                raise ValueError("score inputs must have identical id order")
-            records.extend(other_records)
-            provenance = {"inputs": [provenance, other_provenance]}
+def _combine_grid(records: Sequence[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
     grid = []
     for vw in args.viterbi_weight:
         for rerank_k in args.rerank_k:
             for gate in args.gate or (None,):
                 grid.append(combine_records(records, vw, rerank_k, gate=gate))
-    output = {"provenance": provenance, "grid": grid}
+    return grid
+
+
+def run_combine(args: argparse.Namespace) -> int:
+    # Each `--scores` path is combined independently: `combine` never merges
+    # records across score files.  Doing so by id used to be unreachable --
+    # appending a second file's same-id records onto the first always
+    # produced duplicate ids, which paired_table()/_top1_stats() reject, and
+    # a third file's id-order check compared against the already-extended
+    # list, so it could never pass either (issue #9 Phase 4 review item 3).
+    # `--scores a b ...` documents "multiple inputs get a labeled
+    # comparison" (task2-mission.md), which independent per-file grids give
+    # directly, with no need for the files to share an id set at all.
+    runs = []
+    for path in args.scores:
+        provenance, records = _read_scores(path)
+        runs.append({
+            "source": _display_path(path),
+            "provenance": provenance,
+            "latency": _score_latency(records),
+            "grid": _combine_grid(records, args),
+        })
+    if len(runs) == 1:
+        output = {"provenance": runs[0]["provenance"], "latency": runs[0]["latency"], "grid": runs[0]["grid"]}
+    else:
+        output = {"runs": runs}
     text = json.dumps(output, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
     _atomic_write(args.output, text, prefix=".rerank-combine-")
     if args.json:
