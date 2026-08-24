@@ -23,6 +23,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from beme.features import registered_spec_ids  # noqa: E402
+from beme.rerank_stats import mcnemar  # noqa: E402
 
 
 CONDITIONS = {
@@ -56,19 +57,6 @@ def _run(command: list[str], cwd: Path, stdout: Path | None = None) -> None:
         return
     with stdout.open("w", encoding="utf-8") as stream:
         subprocess.run(command, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT, check=True)
-
-
-def mcnemar(b: int, c: int) -> dict[str, Any]:
-    discordant = b + c
-    if discordant < 25:
-        tail = sum(math.comb(discordant, i) for i in range(min(b, c) + 1)) / (2 ** discordant)
-        p_value = min(1.0, 2.0 * tail)
-        method = "exact_binomial_two_sided"
-    else:
-        statistic = (abs(b - c) - 1.0) ** 2 / discordant if discordant else 0.0
-        p_value = math.erfc(math.sqrt(statistic / 2.0))
-        method = "continuity_corrected_chi_squared"
-    return {"b": b, "c": c, "discordant": discordant, "method": method, "p_value": p_value}
 
 
 def summarize_values(values: list[float | int]) -> dict[str, Any]:

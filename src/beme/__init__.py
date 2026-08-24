@@ -10,6 +10,7 @@ from .lattice import (
     build_lattice,
     k_best_viterbi,
     pos_transition_cost,
+    top1_surface,
 )
 from .oracle import constrained_best_path
 from .training_data import TrainingExample, build_manifest, load_jsonl, load_splits
@@ -68,4 +69,5 @@ __all__ = [
     "k_best_viterbi",
     "load_tsv",
     "pos_transition_cost",
+    "top1_surface",
 ]

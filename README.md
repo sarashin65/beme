@@ -183,6 +183,22 @@ python scripts/evaluate.py --suite all --reranker cross-encoder \
 
 Mozc には文脈がなく第2ランカーを実行しないため、4 方式の pass rate は同じです。BGE は AJIMEE の平均編集距離を日本語特化モデルより合計 3 文字だけ改善しましたが、候補レイテンシは 4.25 倍でした。日本語特化モデルは手作り精度と Mozc pass が BGE と同じで、LLM より 6.69 倍速いため、BeME の既定 Cross-Encoder に採用します。ただし 48.668 ms/候補は IME の候補群全体にはまだ遅く、実運用採用では候補数制限・量子化・ONNX 等の高速化が必要です。
 
+### Phase 4: d1 文脈リランキング
+
+2026-08-24、d1 dev 1,000 件だけで `viterbi_weight=8`・`rerank_k=10` を選択し、d1 test 2,000 件（contrast pair 128 件）を 1 回評価しました。局所モデルは Phase 3 の A0 seed 9、Cross-Encoder は `hotchpotch/japanese-reranker-base-v2` revision `f21b54987ac864d7a355f3384bf05d0939e31cb1` です。
+
+「リランカ単独」は候補生成を省く条件ではありません。候補生成は局所モデルと同一で、順位付けだけを relevance にした `viterbi_weight=0`・`rerank_k=64` です。
+
+| 条件 | d1 test 全体 Top-1 | contrast 128 Top-1 |
+|---|---:|---:|
+| 局所モデル単独（L） | .731000 | .328125 |
+| リランカ単独（R） | .521000 | .421875 |
+| 併用（LR） | **.831500** | **.531250** |
+
+LR は seed 9/17/33 の全 seed で L より改善方向かつ McNemar `p<.05` でした。単一 seed の p 値や seed 間で合算した分割表では判定していません。`surface_recall@10` はリランク前後で全体 `.988000`、contrast `.960938` のままです。
+
+Intel N100・4 core miniPC（host `WIN-I7DHB6T7L79`）の d1 test 先頭50件では、全候補の平均 `3.321963 s/変換` に対し、`rerank_k=10` は `.739371 s/変換`（77.74%削減）でした。`confidence<.25` は救済 recall 1.0 でも test fire rate `.576` だったため、停止規則に従ってcascade gateは配線していません。詳細、loss 54件、artifact hashは [`docs/missions/issue9-phase4/phase4-report.md`](docs/missions/issue9-phase4/phase4-report.md) を参照してください。
+
 ### IPADIC 辞書拡充と P0 の比較（mock）
 
 同日、同じ `top_k=5`、`beam_width=64`、`--suite all --reranker mock` で再測定しました。P0 は手作り 14 件の順位品質を変えず、AJIMEE の macro CER を IPADIC 取り込み直後からさらに `0.051353`（15.04%）低下させ、Mozc も 7 ケース改善しました。
@@ -264,7 +280,7 @@ uv run python scripts/evaluate.py --suite all --reranker mock \
 
 - 既定辞書は IPADIC の活用形・固有名詞を含む 349,043 エントリです。NEologd の新語や接続コスト行列は未導入で、TSV ロード時の最大 RSS はクリーンな CLI 実測で約 156 MiB です。
 - キーワードモックは小規模評価データに合わせた手作りルールです。
-- N100 CPU 上の候補レイテンシは日本語 Cross-Encoder でも約 49 ms、BGE は約 207 ms、0.5B LLM は約 326 ms であり、候補群全体を採点する実用レイテンシを満たしません。
+- N100 CPU の旧ミニ辞書測定では候補レイテンシは日本語 Cross-Encoder 約 49 ms、BGE 約 207 ms、0.5B LLM 約 326 msでした。d1・A0・長い文脈での Phase 4 実測は日本語 Cross-Encoder 71.747–73.454 ms/候補、全候補 3.321963 s/変換、`rerank_k=10` でも .739371 s/変換であり、cascade gateは安全な発火率を得られず未配線です。
 - ビーム幅が小さすぎると、有望な経路を途中で枝刈りする可能性があります。
 - 確信度しきい値 2.0、LLM/Viterbi/Cross-Encoder 重み 1.0 は初期値です。今後は独立したホールドアウトデータで調整します。
 

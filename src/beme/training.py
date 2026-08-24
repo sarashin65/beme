@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .features import FeatureExtractor, feature_delta, path_features
-from .lattice import Lattice, LatticePath, k_best_viterbi
+from .lattice import Lattice, LatticePath, _top1_path, top1_surface
 from .oracle import constrained_best_path
 from .scorer import LinearScorer
 from .training_data import TrainingExample
@@ -81,8 +81,7 @@ def _prediction(
     lattice_builder: LatticeBuilder,
     scorer: LinearScorer,
 ) -> LatticePath | None:
-    paths = k_best_viterbi(lattice_builder(example.reading), beam_width=1, scorer=scorer)
-    return paths[0] if paths else None
+    return _top1_path(lattice_builder(example.reading), scorer)
 
 
 def evaluate_split(
@@ -97,13 +96,12 @@ def evaluate_split(
     exact_matches = 0
     for example in examples:
         lattice = lattice_builder(example.reading)
-        prediction_paths = k_best_viterbi(lattice, beam_width=1, scorer=scorer)
-        prediction = prediction_paths[0] if prediction_paths else None
+        prediction_surface = top1_surface(lattice, scorer)
         gold = constrained_best_path(lattice, example.target_surface, scorer)
         if gold is None:
             coverage_errors += 1
             continue
-        if prediction is not None and prediction.surface == example.target_surface:
+        if prediction_surface == example.target_surface:
             exact_matches += 1
         else:
             model_errors += 1
@@ -178,8 +176,7 @@ def train_scorer(
         for index in indices:
             example = train_examples[index]
             lattice = lattice_builder(example.reading)
-            prediction_paths = k_best_viterbi(lattice, beam_width=1, scorer=scorer)
-            prediction = prediction_paths[0] if prediction_paths else None
+            prediction = _top1_path(lattice, scorer)
             gold = constrained_best_path(lattice, example.target_surface, scorer)
             if gold is None:
                 train_coverage += 1
