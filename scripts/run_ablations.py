@@ -34,6 +34,8 @@ CONDITIONS = {
     "A4": "decomposed_v1-no_source",
     "A5": "decomposed_v1-no_katakana",
     "A6": "decomposed_v1-no_shape",
+    "A7": "decomposed_v1-no_script",
+    "A8": "decomposed_v1-no_script-surface_len",
     "M0": "decomposed_v1+matrix_v1",
     "M1": "decomposed_v1+matrix_v1-pos_pairs",
     "F0": "decomposed_v1+freq_v1",
@@ -236,6 +238,11 @@ def _should_run_a0(conditions: list[str], seeds: list[int], force: bool, root: P
     )
 
 
+def _condition_labels(values: list[str]) -> list[str]:
+    by_spec = {spec_id: label for label, spec_id in CONDITIONS.items()}
+    return [value if value in CONDITIONS else by_spec.get(value, value) for value in values]
+
+
 def _pending_runs(conditions: list[str], seeds: list[int]) -> list[tuple[str, int]]:
     return [
         (condition, seed)
@@ -259,7 +266,9 @@ def main(argv: list[str] | None = None) -> int:
         summary = summarize_only(root)
         (root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         return 0
-    conditions = [value for value in args.conditions.split(",") if value]
+    conditions = _condition_labels(
+        [value for value in args.conditions.split(",") if value]
+    )
     seeds = [int(value) for value in args.seeds.split(",") if value]
     unknown = sorted(set(conditions) - set(CONDITIONS))
     if unknown or set(CONDITIONS.values()) - set(registered_spec_ids()):

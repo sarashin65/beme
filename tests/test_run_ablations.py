@@ -23,7 +23,9 @@ def module():
 
 def test_condition_table_and_mcnemar_methods() -> None:
     value = module()
-    assert len(value.CONDITIONS) == 12
+    assert len(value.CONDITIONS) == 14
+    assert value.CONDITIONS["A7"] == "decomposed_v1-no_script"
+    assert value.CONDITIONS["A8"] == "decomposed_v1-no_script-surface_len"
     assert value.mcnemar(2, 1)["method"] == "exact_binomial_two_sided"
     assert value.mcnemar(20, 10)["method"] == "continuity_corrected_chi_squared"
 
@@ -81,6 +83,15 @@ def test_a0_gate_force_controls_rerun(tmp_path: Path, force: bool, expected: boo
 def test_pending_runs_always_excludes_a0_seed9() -> None:
     value = module()
     assert value._pending_runs(["A0", "A1"], [9, 17]) == [("A0", 17), ("A1", 9), ("A1", 17)]
+
+
+def test_feature_spec_conditions_resolve_to_ablation_labels() -> None:
+    value = module()
+    assert value._condition_labels([
+        "decomposed_v1-no_script",
+        "decomposed_v1-no_script-surface_len",
+        "decomposed_v1-no_shape",
+    ]) == ["A7", "A8", "A6"]
 
 
 def _artifacts(root: Path, condition: str, seed: int, cases: list[dict], errors: int) -> None:

@@ -25,11 +25,12 @@ from beme.weights import Weights
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_registry_contains_the_two_bases_and_six_ablations() -> None:
+def test_registry_contains_the_two_bases_and_eight_ablations() -> None:
     assert registered_spec_ids() == (
         "legacy_v1", "decomposed_v1", "decomposed_v1-lex_only",
         "decomposed_v1-trans_only", "decomposed_v1-no_ipadic_cost",
         "decomposed_v1-no_source", "decomposed_v1-no_katakana",
+        "decomposed_v1-no_script", "decomposed_v1-no_script-surface_len",
         "decomposed_v1-no_shape", "decomposed_v1+matrix_v1",
         "decomposed_v1+matrix_v1-pos_pairs", "decomposed_v1+freq_v1",
         "decomposed_v1+freq_v1-no_ipadic_cost", "decomposed_v1+matrix_v1+freq_v1",
@@ -57,6 +58,28 @@ def test_lexical_and_transition_only_ablate_the_opposite_family() -> None:
     edge = LatticeEdge(0, 1, Token("あ", "あ", "noun", 1.0))
     assert extractor_for("decomposed_v1-trans_only").lexical_features(edge) == {}
     assert extractor_for("decomposed_v1-lex_only").transition_features(None, edge) == {}
+
+
+def test_script_ablations_remove_only_the_declared_shape_features() -> None:
+    edge = LatticeEdge(
+        0, 2, Token("にほん", "日本", "proper_noun", 0.65, source="overlay")
+    )
+    script_features = {
+        "lex.script.kanji", "lex.script.hiragana",
+        "lex.script.katakana", "lex.script.other",
+    }
+
+    no_script = extractor_for("decomposed_v1-no_script").lexical_features(edge)
+    assert script_features.isdisjoint(no_script)
+    assert no_script["lex.surface_len"] == 2.0
+    assert no_script["lex.proper_noun"] == 1.0
+
+    no_script_surface_len = extractor_for(
+        "decomposed_v1-no_script-surface_len"
+    ).lexical_features(edge)
+    assert script_features.isdisjoint(no_script_surface_len)
+    assert "lex.surface_len" not in no_script_surface_len
+    assert no_script_surface_len["lex.proper_noun"] == 1.0
 
 
 def test_unknown_spec_is_rejected_everywhere() -> None:
