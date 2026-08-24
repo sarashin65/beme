@@ -108,6 +108,37 @@ def _artifacts(root: Path, condition: str, seed: int, cases: list[dict], errors:
         json.dumps({"dataset": {"examples": len(cases)}, "cases": cases}), encoding="utf-8"
     )
 
+def test_summarize_only_uses_cli_seeds_and_excludes_incomplete_conditions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    value = module()
+    monkeypatch.setattr(value, "CONDITIONS", {"A0": "baseline", "A1": "condition"})
+    for condition in value.CONDITIONS:
+        for seed, errors in ((1, 10), (5, 20), (9, 30), (17, 99)):
+            _artifacts(tmp_path, condition, seed, _cases(50, 80), errors)
+
+    assert value.main([
+        "--summarize-only",
+        "--seeds",
+        "1,5,9",
+        "--output-root",
+        str(tmp_path),
+    ]) == 0
+    summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    assert summary["completed_conditions"] == ["A0", "A1"]
+    assert [run["seed"] for run in summary["conditions"]["A1"]["seeds"]] == [1, 5, 9]
+    assert summary["conditions"]["A1"]["test_end_to_end_errors"]["median"] == 20
+
+    (tmp_path / "A1" / "seed5" / "report.json").unlink()
+    assert value.main([
+        "--summarize-only",
+        "--seeds",
+        "1,5,9",
+        "--output-root",
+        str(tmp_path),
+    ]) == 0
+    summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    assert summary["completed_conditions"] == ["A0"]
+    assert summary["skipped"] == ["A1"]
+
 
 def _cases(baseline_correct: int, learned_correct: int, total: int = 100) -> list[dict]:
     return [
