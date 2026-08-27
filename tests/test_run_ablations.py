@@ -23,7 +23,9 @@ def module():
 
 def test_condition_table_and_mcnemar_methods() -> None:
     value = module()
-    assert len(value.CONDITIONS) == 12
+    assert len(value.CONDITIONS) == 14
+    assert value.CONDITIONS["A7"] == "decomposed_v1-no_script"
+    assert value.CONDITIONS["A8"] == "decomposed_v1-no_script-surface_len"
     assert value.mcnemar(2, 1)["method"] == "exact_binomial_two_sided"
     assert value.mcnemar(20, 10)["method"] == "continuity_corrected_chi_squared"
 
@@ -83,6 +85,15 @@ def test_pending_runs_always_excludes_a0_seed9() -> None:
     assert value._pending_runs(["A0", "A1"], [9, 17]) == [("A0", 17), ("A1", 9), ("A1", 17)]
 
 
+def test_feature_spec_conditions_resolve_to_ablation_labels() -> None:
+    value = module()
+    assert value._condition_labels([
+        "decomposed_v1-no_script",
+        "decomposed_v1-no_script-surface_len",
+        "decomposed_v1-no_shape",
+    ]) == ["A7", "A8", "A6"]
+
+
 def _artifacts(root: Path, condition: str, seed: int, cases: list[dict], errors: int) -> None:
     directory = root / condition / f"seed{seed}"
     directory.mkdir(parents=True)
@@ -96,6 +107,37 @@ def _artifacts(root: Path, condition: str, seed: int, cases: list[dict], errors:
     (directory / "diagnose_d1.json").write_text(
         json.dumps({"dataset": {"examples": len(cases)}, "cases": cases}), encoding="utf-8"
     )
+
+def test_summarize_only_uses_cli_seeds_and_excludes_incomplete_conditions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    value = module()
+    monkeypatch.setattr(value, "CONDITIONS", {"A0": "baseline", "A1": "condition"})
+    for condition in value.CONDITIONS:
+        for seed, errors in ((1, 10), (5, 20), (9, 30), (17, 99)):
+            _artifacts(tmp_path, condition, seed, _cases(50, 80), errors)
+
+    assert value.main([
+        "--summarize-only",
+        "--seeds",
+        "1,5,9",
+        "--output-root",
+        str(tmp_path),
+    ]) == 0
+    summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    assert summary["completed_conditions"] == ["A0", "A1"]
+    assert [run["seed"] for run in summary["conditions"]["A1"]["seeds"]] == [1, 5, 9]
+    assert summary["conditions"]["A1"]["test_end_to_end_errors"]["median"] == 20
+
+    (tmp_path / "A1" / "seed5" / "report.json").unlink()
+    assert value.main([
+        "--summarize-only",
+        "--seeds",
+        "1,5,9",
+        "--output-root",
+        str(tmp_path),
+    ]) == 0
+    summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    assert summary["completed_conditions"] == ["A0"]
+    assert summary["skipped"] == ["A1"]
 
 
 def _cases(baseline_correct: int, learned_correct: int, total: int = 100) -> list[dict]:

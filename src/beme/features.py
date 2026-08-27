@@ -274,6 +274,13 @@ _ABLATION_REMOVALS = {
     "decomposed_v1-no_ipadic_cost": {"lex.ipadic_cost_mapped"},
     "decomposed_v1-no_source": {"lex.source.overlay", "lex.overlay_cost"},
     "decomposed_v1-no_katakana": {"lex.katakana_surface"},
+    "decomposed_v1-no_script": {
+        *(f"lex.script.{category}" for category in _SCRIPT_CATEGORIES),
+    },
+    "decomposed_v1-no_script-surface_len": {
+        *(f"lex.script.{category}" for category in _SCRIPT_CATEGORIES),
+        "lex.surface_len",
+    },
     "decomposed_v1-no_shape": {
         *(f"lex.script.{category}" for category in _SCRIPT_CATEGORIES),
         "lex.surface_len", "lex.proper_noun",

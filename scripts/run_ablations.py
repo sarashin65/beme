@@ -34,6 +34,8 @@ CONDITIONS = {
     "A4": "decomposed_v1-no_source",
     "A5": "decomposed_v1-no_katakana",
     "A6": "decomposed_v1-no_shape",
+    "A7": "decomposed_v1-no_script",
+    "A8": "decomposed_v1-no_script-surface_len",
     "M0": "decomposed_v1+matrix_v1",
     "M1": "decomposed_v1+matrix_v1-pos_pairs",
     "F0": "decomposed_v1+freq_v1",
@@ -138,9 +140,10 @@ def _condition_summary(root: Path, condition: str, seeds: list[int]) -> dict[str
     return {"seeds": runs, "test_end_to_end_errors": summarize_values(model_errors), "mcnemar": tables}
 
 
-def summarize_only(root: Path) -> dict[str, Any]:
-    available = [condition for condition in CONDITIONS if all((root / condition / f"seed{seed}" / "report.json").is_file() for seed in SEEDS)]
-    conditions = {condition: _condition_summary(root, condition, list(SEEDS)) for condition in available}
+def summarize_only(root: Path, seeds: list[int] | None = None) -> dict[str, Any]:
+    selected_seeds = list(SEEDS if seeds is None else seeds)
+    available = [condition for condition in CONDITIONS if all((root / condition / f"seed{seed}" / "report.json").is_file() for seed in selected_seeds)]
+    conditions = {condition: _condition_summary(root, condition, selected_seeds) for condition in available}
     incomplete = [
         {"condition": condition, "seed": run["seed"], "reason": "downstream artifact missing after subprocess failure"}
         for condition, value in conditions.items() for run in value["seeds"] if not run["complete"]
@@ -236,6 +239,11 @@ def _should_run_a0(conditions: list[str], seeds: list[int], force: bool, root: P
     )
 
 
+def _condition_labels(values: list[str]) -> list[str]:
+    by_spec = {spec_id: label for label, spec_id in CONDITIONS.items()}
+    return [value if value in CONDITIONS else by_spec.get(value, value) for value in values]
+
+
 def _pending_runs(conditions: list[str], seeds: list[int]) -> list[tuple[str, int]]:
     return [
         (condition, seed)
@@ -255,12 +263,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
     root = args.output_root
+    seeds = [int(value) for value in args.seeds.split(",") if value]
     if args.summarize_only:
-        summary = summarize_only(root)
+        summary = summarize_only(root, seeds)
         (root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         return 0
-    conditions = [value for value in args.conditions.split(",") if value]
-    seeds = [int(value) for value in args.seeds.split(",") if value]
+    conditions = _condition_labels(
+        [value for value in args.conditions.split(",") if value]
+    )
     unknown = sorted(set(conditions) - set(CONDITIONS))
     if unknown or set(CONDITIONS.values()) - set(registered_spec_ids()):
         parser.error(f"unknown or unregistered condition: {unknown}")
@@ -293,7 +303,7 @@ def main(argv: list[str] | None = None) -> int:
                 results.append(future.result())
             except Exception as exc:
                 failures.append({"condition": condition, "seed": seed, "error": str(exc)})
-    summary = summarize_only(root)
+    summary = summarize_only(root, seeds)
     summary.update({"run_seconds": sorted(results, key=lambda item: (item["condition"], item["seed"])), "failed": summary["failed"] + failures})
     (root / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     return 1 if failures else 0
