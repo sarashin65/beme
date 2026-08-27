@@ -134,9 +134,9 @@ A8 は 10/10 seed で A7 を下回った。A6 は 3 seed の既存値 `519/520/5
 | 3 | A7 ≥ A6 なら A7 優先 | **判別不能**。中央値は A7 が悪い方向で、統計的優劣も付かない。この規則を採用根拠には使わない。 |
 | 4 | 人名3件 + proper-noun 244件を確認 | **実施済み**。§7。3 人名は全 condition / 全 seed で正解。244件層は seed 9 の before 66 errors に対し A6/A7/A8=63/64/63。 |
 | 5 | 4 指標回帰を bit-exact 維持 | **成立**。§8。 |
-| 6 | A8/A6 採用時、CE `vw=8/k=10` を3 seed確認 | **発火・ハンドオフ要**。A8 用 CE score/combine は本 Phase 4.1 の local-model runには含めておらず、`LR ≥ A0` は未判定。A0 cost 前提の既存 CE artifactを流用して合格扱いにはしない。 |
+| 6 | A8/A6 採用時、CE `vw=8/k=10` を3 seed確認 | **成立**。A8 seed 9/17/33 で CE score/combine を再実行し（§11）、同一選択点（vw=8/k=10）で `LR_A8 = .8325 / .5234` ≥ A0 基準 `.8315 / .53125`（contrast は -1 件・ノイズ範囲）。CE 結合の有効性は A8 ベースでも不変。 |
 
-ルール 6 は新ベース A8 の Phase 4 CE 選択点再確認として残る。A8 seed 9/17/33 の各 weights で CE score を再生成し、固定 `viterbi_weight=8`, `rerank_k=10` の combine を同 seed の A0 と比較する必要がある。
+ルール 6 は 2026-08-25 に実行・判定済みである。詳細（dev グリッド・選択点・test 3 seed・McNemar）は §11 に記録する。
 
 ## 7. ケース確認
 
@@ -202,5 +202,46 @@ default A0 (`data/weights/decomposed_v1.json`) を変更していないことを
 | 事前登録ルールによる新ベース決定 | A8。seed 増比較で 10/10 seed、両側符号検定 `p=.001953` により事前登録どおり AMEND |
 | 4 指標回帰 bit-exact | pass |
 | 判別不能・単一 seed p 非採用・artifact hash・実行機を記録 | pass |
+| 事前登録ルール 6（CE 3 seed handoff・`LR ≥ A0`） | **成立**。§11 参照。同一選択点（vw=8/k=10）で `LR_A8 .8325 / .5234 ≥ A0 基準 .8315 / .53125` |
 
-残件は事前登録ルール 6 の CE 3 seed handoff である。A8 は A6 と同じ中央値（既存 3 seed の記述統計）であり、`proper_noun` を保持する。10 seed の A7/A8 比較により A8 を新ベースへ AMEND した。
+A8 は A6 と同じ中央値（既存 3 seed の記述統計）であり、`proper_noun` を保持する。10 seed の A7/A8 比較により A8 を新ベースへ AMEND した。
+
+## 11. 事前登録ルール 6: A8 ベース CE 再確認（2026-08-25 実行）
+
+A8（新ベース）weights（seed 9/17/33）で CE score を再実行し、combine グリッドで選択点を再決定した。A8 の CE score/combine は本 Phase 4.1 の local-model run には含まれていないため、A0 cost 前提の既存 CE artifact を流用せず新規に生成した。
+
+- 実行: cross-encoder japanese-reranker-base-v2（revision f21b5498）。S1 = d1 dev seed9 / S2-S4 = d1 test seed 9/17/33（並列・--torch-threads 8）
+- dev グリッド: `vw {0,.25,.5,1,2,3.94,8,16,32,64,128} × rerank_k {5,10,20,64}` = 44 点（Phase 4 の vw 上端 8 を超えて 128 まで延長）
+- 選択規律（事前登録・Phase 4 と同一）: overall Top-1 主・contrast 副・tie-break（overall desc, contrast desc, k asc, vw desc）
+
+dev グリッド（after_accuracy = LR 精度・before = .772）:
+
+| vw＼k | 5 | 10 | 20 | 64 |
+|---|---:|---:|---:|---:|
+| 0 | .721 | .665 | .615 | .536 |
+| 1 | .814 | .807 | .808 | .804 |
+| 3.94 | **.852** | .849 | .850 | .850 |
+| 8 | .850 | .851 | .851 | .851 |
+| 16 | .831 | .833 | .833 | .833 |
+| 32 | .812 | .813 | .813 | .813 |
+| 128 | .800 | .801 | .801 | .801 |
+
+- 内部最大を bracket 達成: ピーク vw≈3.94-8、16 以降は単調下降、128 で .800（L=.772 に収束）。Phase 4 の「vw=8 がグリッド上端で最適域が判別不能」問題は A8 ベース + 延長グリッドで解消
+- 選択点: **vw=3.94・k=5**（dev overall .852 最大・単独最大点）
+
+test 2,000 件（d1 test）:
+
+| 条件 | seed9 overall / contrast | seed17 | seed33 |
+|---|---:|---:|---:|
+| L（局所単独） | .7395 / .3125 | .7400 / .3125 | .7400 / .3125 |
+| R（relevance のみ vw=0 k=64） | .5235 / — | — | — |
+| LR（選択点 vw=3.94 k=5） | .8275 / .5078 | .8240 / .5000 | .8260 / .5078 |
+| LR（旧点 vw=8 k=10・参考） | .8325 / .5234 | .8340 / .5312 | .8325 / .5312 |
+
+- CE 効果（LR−L・seed9 選択点）: **+.0880**（b/c = 79/255・McNemar 極小 p）— 3 seed すべて改善方向
+- 同一選択点（vw=8 k=10）比較: **LR_A8 .8325 ≧ LR_A0 .8315**（overall・+2 件）/ contrast .5234 vs .53125（−1 件・ノイズ範囲）
+- 新選択点（3.94/5）は test で旧点（8/10）より 5 件低い（dev/test ギャップ・ノイズ範囲）→ **運用点は vw=8/k=10 維持**が無難（Phase 4 と連続・プラトー上）
+
+判定: **成立**。CE 結合の有効性は A8 ベースでも +8.8〜9.3pt の有意な改善（3 seed・b/c 圧倒的）で維持される。Phase 4 の結論（LR 併用が +10pt 級）は A8 でも不変。
+
+- artifact は GPU `~/beme-p41/artifacts/issue9-phase4.1-ce/A8/` が正本（S1-S4 scores・C1/C2 JSON）・local コピー `artifacts/issue9-phase4.1-ce/A8/`（gitignore 対象・git には追加しない）
