@@ -1,0 +1,42 @@
+{
+  "articles": {
+    "dev_test_skipped": 1204,
+    "evaluation_overlap_skipped": 3,
+    "seen": 5104,
+    "train_counted": 3897
+  },
+  "counts": {
+    "total_tokens": 11646065,
+    "unique_pairs": 95987,
+    "unique_readings": 64389,
+    "unique_surfaces": 93689
+  },
+  "coverage": {
+    "d1_test_gold_pair_coverage": 0.856,
+    "d1_test_gold_pairs": 2000,
+    "d1_test_gold_pairs_seen": 1712,
+    "d1_test_gold_surface_coverage": 0.856,
+    "d1_test_gold_surfaces_seen": 1712,
+    "d1_train_gold_pair_coverage": 0.8156
+  },
+  "created_on": "2026-08-28",
+  "leak_audit": {
+    "counted_article_ids_intersecting_d1_dev_test": 0,
+    "d1_dev_test_article_ids": 194,
+    "passed": true
+  },
+  "schema_version": 1,
+  "source": {
+    "bytes_count_includes_skipped_articles": true,
+    "config": "20231101.ja",
+    "dataset": "wikimedia/wikipedia",
+    "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+    "utf8_bytes_scanned": 104852271
+  },
+  "split": {
+    "algorithm": "sha256(seed:article_id) modulo 10000",
+    "seed": 20260822,
+    "train_upper": 7700
+  },
+  "table_sha256": "800ae8addc6c067ed15ffa421bed2ba095fde074f2e7c1a4d47f6b8b369d2455"
+}
