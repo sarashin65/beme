@@ -1,226 +1,164 @@
-"""Deterministic (reading, surface) corpus frequency table for F2."""
+"""Deterministic corpus frequency table used by the F2 features."""
 
 from __future__ import annotations
 
-import hashlib
-import struct
 from dataclasses import dataclass, field
+import hashlib
 from pathlib import Path
+import struct
+from typing import Mapping
 
 MAGIC = b"BEMECF1"
 VERSION = 1
-DEFAULT_CORPUS_FREQ_PATH = (
-    Path(__file__).resolve().parents[2] / "data" / "corpus_freq_v1.bin"
-)
-_HEADER = struct.Struct("<8sHII")
-
-
-class CorpusFrequencyError(ValueError):
-    """Raised when the table file is missing, truncated, or malformed."""
+DEFAULT_CORPUS_FREQ_PATH = Path(__file__).resolve().parents[2] / "data" / "corpus_freq_v1.bin"
+_HEADER = struct.Struct("<7sBHHQIII")
 
 
 @dataclass(frozen=True, slots=True)
 class CorpusFrequencyTable:
-    """Counts of (reading, surface) pairs over train-split Wikipedia articles.
-
-    Readings are hiragana-only (``build_d1_data.node_reading`` semantics);
-    surfaces are the raw node surfaces. All counts are token counts.
-    """
-
-    readings: tuple[str, ...]
-    surfaces: tuple[str, ...]
-    pair_counts: tuple[int, ...]  # aligned with pair_readings / pair_surfaces
-    pair_readings: tuple[int, ...]  # index into readings
-    pair_surfaces: tuple[int, ...]  # index into surfaces
-    surface_counts: tuple[int, ...]  # aligned with surfaces
     total_tokens: int
-    _reading_index: dict[str, int] = field(init=False, repr=False)
-    _surface_index: dict[str, int] = field(init=False, repr=False)
-    _pair_index: dict[tuple[int, int], int] = field(init=False, repr=False)
+    _pairs: tuple[tuple[str, str, int], ...]
+    _surfaces: tuple[tuple[str, int], ...]
+    _readings: tuple[tuple[str, int], ...]
+    _pair_indices: dict[tuple[str, str], int] = field(init=False, repr=False)
+    _surface_indices: dict[str, int] = field(init=False, repr=False)
+    _reading_indices: dict[str, int] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "_reading_index", {r: i for i, r in enumerate(self.readings)}
-        )
-        object.__setattr__(
-            self, "_surface_index", {s: i for i, s in enumerate(self.surfaces)}
-        )
-        object.__setattr__(
-            self,
-            "_pair_index",
-            {
-                (ri, si): i
-                for i, (ri, si) in enumerate(zip(self.pair_readings, self.pair_surfaces))
-            },
-        )
+        object.__setattr__(self, "_pair_indices", {(r, s): c for r, s, c in self._pairs})
+        object.__setattr__(self, "_surface_indices", dict(self._surfaces))
+        object.__setattr__(self, "_reading_indices", dict(self._readings))
 
-    # -- lookups used by task4's feature implementation -------------------
     def pair_count(self, reading: str, surface: str) -> int:
-        """c(r, s): tokens where *surface* was read *reading*."""
-        ri = self._reading_index.get(reading)
-        si = self._surface_index.get(surface)
-        if ri is None or si is None:
-            return 0
-        index = self._pair_index.get((ri, si))
-        return self.pair_counts[index] if index is not None else 0
+        return self._pair_indices.get((reading, surface), 0)
 
     def reading_count(self, reading: str) -> int:
-        """c(r) = sum_s c(r, s)."""
-        ri = self._reading_index.get(reading)
-        if ri is None:
-            return 0
-        return sum(
-            count
-            for index, count in enumerate(self.pair_counts)
-            if self.pair_readings[index] == ri
-        )
+        return self._reading_indices.get(reading, 0)
 
     def surface_count(self, surface: str) -> int:
-        """c(s): tokens with this surface, any reading."""
-        si = self._surface_index.get(surface)
-        return self.surface_counts[si] if si is not None else 0
+        return self._surface_indices.get(surface, 0)
 
-    # -- construction ------------------------------------------------------
     @classmethod
     def from_counts(
         cls,
-        pairs: dict[tuple[str, str], int],
-        surfaces: dict[str, int],
+        pairs: Mapping[tuple[str, str], int],
+        surfaces: Mapping[str, int],
         total: int,
     ) -> "CorpusFrequencyTable":
-        """Build an in-memory table from raw counters (test / builder input).
-
-        ``pairs`` maps (reading, surface) -> count; ``surfaces`` maps
-        surface -> count; ``total`` is the total token count N.
-        """
-        readings = sorted({reading for reading, _ in pairs})
-        surface_names = sorted(surfaces)
-        reading_index = {r: i for i, r in enumerate(readings)}
-        surface_index = {s: i for i, s in enumerate(surface_names)}
-        ordered = sorted(
-            ((reading, surface, count) for (reading, surface), count in pairs.items() if count > 0),
-            key=lambda item: (reading_index[item[0]], surface_index[item[1]]),
-        )
-        pair_counts = tuple(count for _, _, count in ordered)
-        pair_readings = tuple(reading_index[reading] for reading, _, _ in ordered)
-        pair_surfaces = tuple(surface_index[surface] for _, surface, _ in ordered)
-        surface_counts = tuple(surfaces[s] for s in surface_names)
+        if total < 0:
+            raise ValueError("total_tokens must be non-negative")
+        pair_rows = []
+        reading_counts: dict[str, int] = {}
+        for (reading, surface), count in pairs.items():
+            if not isinstance(reading, str) or not isinstance(surface, str) or count <= 0:
+                raise ValueError("pair keys must be strings and counts must be positive")
+            pair_rows.append((reading, surface, int(count)))
+            reading_counts[reading] = reading_counts.get(reading, 0) + int(count)
+        surface_rows = []
+        for surface, count in surfaces.items():
+            if not isinstance(surface, str) or count < 0:
+                raise ValueError("surface counts must be non-negative")
+            surface_rows.append((surface, int(count)))
         return cls(
-            readings=tuple(readings),
-            surfaces=tuple(surface_names),
-            pair_counts=pair_counts,
-            pair_readings=pair_readings,
-            pair_surfaces=pair_surfaces,
-            surface_counts=surface_counts,
-            total_tokens=total,
+            int(total),
+            tuple(sorted(pair_rows, key=lambda row: (row[0], row[1]))),
+            tuple(sorted(surface_rows)),
+            tuple(sorted(reading_counts.items())),
         )
-
-    # -- binary format -----------------------------------------------------
-    def dump(self, path: str | Path) -> str:
-        """Write the table deterministically; returns the SHA-256 hex digest.
-
-        Layout: header (magic, version, n_readings, n_surfaces, n_pairs),
-        then per-section length-prefixed UTF-8 string arrays and little-endian
-        uint32 count arrays. Identical inputs produce identical bytes.
-        """
-        path = Path(path)
-        buffer = bytearray()
-        buffer += _HEADER.pack(MAGIC, VERSION, len(self.readings), len(self.surfaces))
-        buffer += _u32(len(self.pair_counts))
-        buffer += _strings(self.readings)
-        buffer += _strings(self.surfaces)
-        buffer += _u32s(self.pair_readings)
-        buffer += _u32s(self.pair_surfaces)
-        buffer += _u32s(self.pair_counts)
-        buffer += _u32s(self.surface_counts)
-        buffer += _u64(self.total_tokens)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(bytes(buffer))
-        return hashlib.sha256(bytes(buffer)).hexdigest()
 
     @classmethod
     def load(cls, path: str | Path = DEFAULT_CORPUS_FREQ_PATH) -> "CorpusFrequencyTable":
-        """Load a table; raises CorpusFrequencyError if the file is absent."""
         path = Path(path)
         if not path.exists():
-            raise CorpusFrequencyError(f"corpus frequency table not found: {path}")
-        data = path.read_bytes()
-        offset = 0
+            raise FileNotFoundError(
+                f"corpus frequency table not found: {path}; regenerate with scripts/build_corpus_freq.py"
+            )
+        try:
+            data = path.read_bytes()
+            offset = 0
 
-        def take(size: int) -> bytes:
-            nonlocal offset
-            chunk = data[offset : offset + size]
-            if len(chunk) != size:
-                raise CorpusFrequencyError("corpus frequency table is truncated")
-            offset += size
-            return chunk
+            def take(size: int) -> bytes:
+                nonlocal offset
+                chunk = data[offset : offset + size]
+                if len(chunk) != size:
+                    raise ValueError("corpus frequency table is truncated")
+                offset += size
+                return chunk
 
-        magic, version, n_readings, n_surfaces = _HEADER.unpack(take(_HEADER.size))
-        if magic.rstrip(b"\x00") != MAGIC or version != VERSION:
-            raise CorpusFrequencyError("unsupported corpus frequency table format")
-        n_pairs = struct.unpack("<I", take(4))[0]
-        readings = _read_strings(take, n_readings)
-        surfaces = _read_strings(take, n_surfaces)
-        pair_readings = _read_u32s(take, n_pairs)
-        pair_surfaces = _read_u32s(take, n_pairs)
-        pair_counts = _read_u32s(take, n_pairs)
-        surface_counts = _read_u32s(take, n_surfaces)
-        total_tokens = struct.unpack("<Q", take(8))[0]
-        if offset != len(data):
-            raise CorpusFrequencyError("corpus frequency table has trailing data")
-        table = cls(
-            readings=tuple(readings),
-            surfaces=tuple(surfaces),
-            pair_counts=tuple(pair_counts),
-            pair_readings=tuple(pair_readings),
-            pair_surfaces=tuple(pair_surfaces),
-            surface_counts=tuple(surface_counts),
-            total_tokens=total_tokens,
-        )
-        if table.total_tokens != sum(table.pair_counts):
-            raise CorpusFrequencyError("total_tokens does not match sum of pair counts")
-        return table
+            magic, version, reserved, reserved2, total, n_readings, n_surfaces, n_pairs = _HEADER.unpack(
+                take(_HEADER.size)
+            )
+            if magic != MAGIC or version != VERSION or reserved != 0 or reserved2 != 0:
+                raise ValueError("unsupported corpus frequency table format")
+
+            def strings(count: int) -> tuple[str, ...]:
+                lengths = struct.unpack(f"<{count}I", take(4 * count)) if count else ()
+                blob = take(sum(lengths))
+                values = []
+                cursor = 0
+                for length in lengths:
+                    try:
+                        values.append(blob[cursor : cursor + length].decode("utf-8"))
+                    except UnicodeDecodeError as error:
+                        raise ValueError("corpus frequency string blob is not UTF-8") from error
+                    cursor += length
+                if tuple(sorted(set(values))) != tuple(values):
+                    raise ValueError("corpus frequency strings must be sorted and unique")
+                return tuple(values)
+
+            readings = strings(n_readings)
+            surfaces = strings(n_surfaces)
+            reading_counts = struct.unpack(f"<{n_readings}Q", take(8 * n_readings)) if n_readings else ()
+            surface_counts = struct.unpack(f"<{n_surfaces}Q", take(8 * n_surfaces)) if n_surfaces else ()
+            pair_values = struct.unpack(f"<{n_pairs * 3}I", take(12 * n_pairs)) if n_pairs else ()
+            if offset != len(data):
+                raise ValueError("corpus frequency table has trailing data")
+            pairs = []
+            previous = None
+            for index in range(n_pairs):
+                reading_index, surface_index, count = pair_values[index * 3 : index * 3 + 3]
+                if reading_index >= n_readings or surface_index >= n_surfaces or count == 0:
+                    raise ValueError("invalid corpus frequency pair")
+                key = (reading_index, surface_index)
+                if previous is not None and key <= previous:
+                    raise ValueError("corpus frequency pairs must be sorted and unique")
+                previous = key
+                pairs.append((readings[reading_index], surfaces[surface_index], count))
+            return cls(
+                total,
+                tuple(pairs),
+                tuple(zip(surfaces, surface_counts)),
+                tuple(zip(readings, reading_counts)),
+            )
+        except struct.error as error:
+            raise ValueError("invalid corpus frequency table") from error
+
+    def dump(self, path: str | Path) -> str:
+        readings = tuple(reading for reading, _ in self._readings)
+        surfaces = tuple(surface for surface, _ in self._surfaces)
+        reading_indices = {value: index for index, value in enumerate(readings)}
+        surface_indices = {value: index for index, value in enumerate(surfaces)}
+        try:
+            pair_values = tuple(
+                value
+                for reading, surface, count in self._pairs
+                for value in (reading_indices[reading], surface_indices[surface], count)
+            )
+        except KeyError as error:
+            raise ValueError("every pair surface must be present in surface counts") from error
+        if self.total_tokens > 0xFFFFFFFFFFFFFFFF:
+            raise ValueError("total_tokens does not fit in the table format")
+        payload = bytearray(_HEADER.pack(MAGIC, VERSION, 0, 0, self.total_tokens, len(readings), len(surfaces), len(self._pairs)))
+        for values in (readings, surfaces):
+            encoded = tuple(value.encode("utf-8") for value in values)
+            payload.extend(struct.pack(f"<{len(encoded)}I", *(len(value) for value in encoded)) if encoded else b"")
+            payload.extend(b"".join(encoded))
+        payload.extend(struct.pack(f"<{len(self._readings)}Q", *(count for _, count in self._readings)) if self._readings else b"")
+        payload.extend(struct.pack(f"<{len(self._surfaces)}Q", *(count for _, count in self._surfaces)) if self._surfaces else b"")
+        payload.extend(struct.pack(f"<{len(pair_values)}I", *pair_values) if pair_values else b"")
+        digest = hashlib.sha256(payload).hexdigest()
+        Path(path).write_bytes(payload)
+        return digest
 
 
-def _u32(value: int) -> bytes:
-    return struct.pack("<I", value)
-
-
-def _u64(value: int) -> bytes:
-    return struct.pack("<Q", value)
-
-
-def _strings(values: tuple[str, ...]) -> bytes:
-    buffer = bytearray()
-    for value in values:
-        encoded = value.encode("utf-8")
-        buffer += _u32(len(encoded))
-        buffer += encoded
-    return bytes(buffer)
-
-
-def _u32s(values: tuple[int, ...]) -> bytes:
-    return struct.pack(f"<{len(values)}I", *values) if values else b""
-
-
-def _read_strings(take, count: int) -> list[str]:
-    values = []
-    for _ in range(count):
-        length = struct.unpack("<I", take(4))[0]
-        values.append(take(length).decode("utf-8"))
-    return values
-
-
-def _read_u32s(take, count: int) -> list[int]:
-    if count == 0:
-        return []
-    return list(struct.unpack(f"<{count}I", take(4 * count)))
-
-
-__all__ = [
-    "DEFAULT_CORPUS_FREQ_PATH",
-    "MAGIC",
-    "VERSION",
-    "CorpusFrequencyError",
-    "CorpusFrequencyTable",
-]
+__all__ = ["CorpusFrequencyTable", "DEFAULT_CORPUS_FREQ_PATH", "MAGIC", "VERSION"]

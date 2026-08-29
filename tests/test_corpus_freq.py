@@ -1,200 +1,163 @@
-"""Tests for the F2 corpus frequency table and its leak-safe builder."""
-
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
+from beme.corpus_freq import CorpusFrequencyTable
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS_ROOT = REPOSITORY_ROOT / "scripts"
-SRC_ROOT = REPOSITORY_ROOT / "src"
-for path in (str(SCRIPTS_ROOT), str(SRC_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
-
-from build_d1_data import (  # noqa: E402
-    article_split,
-    load_exclusion_terms,
-    overlaps_evaluation,
-)
-from beme.corpus_freq import (  # noqa: E402
-    CorpusFrequencyError,
-    CorpusFrequencyTable,
-)
-
-SPLIT_SEED = 20260822
+sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
+from build_d1_data import article_split, load_exclusion_terms  # noqa: E402
 
 
-def _find_article_ids_for_splits(count_per_split: int = 1) -> dict[str, str]:
-    """Find synthetic article ids that hash into each split bucket.
+def test_table_round_trip_is_exact(tmp_path: Path) -> None:
+    table = CorpusFrequencyTable.from_counts(
+        {("かな", "仮名"): 3, ("かんじ", "漢字"): 2},
+        {"仮名": 3, "漢字": 2},
+        5,
+    )
+    path = tmp_path / "table.bin"
+    digest = table.dump(path)
+    loaded = CorpusFrequencyTable.load(path)
+    assert loaded.total_tokens == 5
+    assert loaded.pair_count("かな", "仮名") == 3
+    assert loaded.reading_count("かな") == 3
+    assert loaded.surface_count("漢字") == 2
+    assert loaded.pair_count("なし", "なし") == 0
+    assert digest == __import__("hashlib").sha256(path.read_bytes()).hexdigest()
 
-    The bucket is decided by article_split's actual hash, so this probes ids
-    instead of hardcoding hash values.
-    """
-    found: dict[str, str] = {}
-    for i in range(100_000):
-        article_id = f"cf-test-{i}"
-        split = article_split(article_id, SPLIT_SEED)
-        if found.get(split) is None:
-            found[split] = article_id
-        if all(split in found for split in ("train", "dev", "test")):
-            return {name: found[name] for name in ("train", "dev", "test")}
-    raise AssertionError("could not find article ids for all three splits")
+
+def test_dump_is_deterministic(tmp_path: Path) -> None:
+    first = CorpusFrequencyTable.from_counts(
+        {("b", "β"): 2, ("a", "α"): 1}, {"β": 2, "α": 1}, 3
+    )
+    second = CorpusFrequencyTable.from_counts(
+        {("a", "α"): 1, ("b", "β"): 2}, {"α": 1, "β": 2}, 3
+    )
+    assert first.dump(tmp_path / "first.bin") == second.dump(tmp_path / "second.bin")
+    assert (tmp_path / "first.bin").read_bytes() == (tmp_path / "second.bin").read_bytes()
 
 
-def _run_builder(tmp_path: Path, articles_jsonl: Path, **extra: object) -> subprocess.CompletedProcess:
+def test_load_missing_path_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="scripts/build_corpus_freq.py"):
+        CorpusFrequencyTable.load(tmp_path / "missing.bin")
+
+
+def test_truncated_table_raises(tmp_path: Path) -> None:
+    path = tmp_path / "table.bin"
+    CorpusFrequencyTable.from_counts({("a", "A"): 1}, {"A": 1}, 1).dump(path)
+    path.write_bytes(path.read_bytes()[:-1])
+    with pytest.raises(ValueError):
+        CorpusFrequencyTable.load(path)
+
+
+def _article_id_for_split(split: str, seed: int = 20260822) -> str:
+    for number in range(100_000):
+        article_id = f"synthetic-{split}-{number}"
+        if article_split(article_id, seed) == split:
+            return article_id
+    raise AssertionError(f"could not find {split} article id")
+
+
+def _write_articles(path: Path, rows: list[dict[str, str]]) -> None:
+    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+
+
+def _run_builder(tmp_path: Path, articles: Path, *, d1_dir: Path | None = None, allow_missing: bool = True):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    output = tmp_path / "table.bin"
+    manifest = tmp_path / "manifest.json"
     command = [
         sys.executable,
-        str(SCRIPTS_ROOT / "build_corpus_freq.py"),
+        str(REPOSITORY_ROOT / "scripts/build_corpus_freq.py"),
         "--articles-jsonl",
-        str(articles_jsonl),
+        str(articles),
         "--output",
-        str(tmp_path / "cf.bin"),
+        str(output),
         "--manifest",
-        str(tmp_path / "cf.manifest.json"),
+        str(manifest),
         "--d1-dir",
-        str(tmp_path / "d1"),
+        str(d1_dir or tmp_path / "d1"),
         "--coverage-pairs",
-        str(tmp_path / "coverage_pairs.jsonl"),
+        str(tmp_path / "no-coverage-pairs.jsonl"),
+        "--progress-every",
+        "0",
     ]
-    for key, value in extra.items():
-        command += [f"--{key.replace('_', '-')}", str(value)]
-    return subprocess.run(command, capture_output=True, text=True, check=False)
+    if allow_missing:
+        command.append("--allow-missing-d1")
+    result = subprocess.run(command, cwd=REPOSITORY_ROOT, text=True, capture_output=True)
+    return result, output, json.loads(manifest.read_text(encoding="utf-8"))
 
 
-def _write_articles(articles: list[dict[str, str]], path: Path) -> None:
-    path.write_text(
-        "\n".join(json.dumps(article, ensure_ascii=False) for article in articles) + "\n",
-        encoding="utf-8",
-    )
-
-
-def test_round_trip_is_exact_and_deterministic(tmp_path: Path) -> None:
-    pairs = {
-        ("きしゃ", "記者"): 5,
-        ("きしゃ", "汽車"): 2,
-        ("はし", "箸"): 7,
-        ("あめ", "雨"): 1,
-    }
-    surfaces = {"記者": 5, "汽車": 2, "箸": 7, "雨": 1}
-    total = sum(pairs.values())
-    table = CorpusFrequencyTable.from_counts(pairs, surfaces, total)
-    assert table.total_tokens == total
-    assert table.pair_count("きしゃ", "記者") == 5
-    assert table.pair_count("きしゃ", "汽車") == 2
-    assert table.pair_count("きしゃ", "箸") == 0
-    assert table.reading_count("きしゃ") == 7
-    assert table.reading_count("はし") == 7
-    assert table.reading_count("みず") == 0
-    assert table.surface_count("箸") == 7
-    assert table.surface_count("橋") == 0
-
-    first = tmp_path / "first.bin"
-    second = tmp_path / "second.bin"
-    digest_a = table.dump(first)
-    digest_b = table.dump(second)
-    assert digest_a == digest_b
-    reloaded = CorpusFrequencyTable.load(first)
-    assert reloaded.readings == table.readings
-    assert reloaded.surfaces == table.surfaces
-    assert reloaded.pair_counts == table.pair_counts
-    assert reloaded.pair_readings == table.pair_readings
-    assert reloaded.pair_surfaces == table.pair_surfaces
-    assert reloaded.surface_counts == table.surface_counts
-    assert reloaded.total_tokens == table.total_tokens
-    for reading in table.readings:
-        assert reloaded.reading_count(reading) == table.reading_count(reading)
-    for surface in table.surfaces:
-        assert reloaded.surface_count(surface) == table.surface_count(surface)
-
-
-def test_load_missing_file_raises_explicit_error(tmp_path: Path) -> None:
-    with pytest.raises(CorpusFrequencyError):
-        CorpusFrequencyTable.load(tmp_path / "does-not-exist.bin")
-
-
-def test_builder_counts_only_train_split_articles(tmp_path: Path) -> None:
-    ids = _find_article_ids_for_splits()
-    articles = [
-        {
-            "id": ids["train"],
-            "title": "train article",
-            "text": "記者は汽車を見送った。",
-        },
-        {
-            "id": ids["dev"],
-            "title": "dev article",
-            "text": "箸で橋を渡った。",
-        },
-        {
-            "id": ids["test"],
-            "title": "test article",
-            "text": "雨は降った。",
-        },
+def test_only_train_bucket_articles_are_counted(tmp_path: Path) -> None:
+    ids = {split: _article_id_for_split(split) for split in ("train", "dev", "test")}
+    rows = [
+        {"id": ids["train"], "text": "訓練専用語彙を数える。"},
+        {"id": ids["dev"], "text": "開発専用語彙を数えない。"},
+        {"id": ids["test"], "text": "試験専用語彙を数えない。"},
     ]
-    path = tmp_path / "articles.jsonl"
-    _write_articles(articles, path)
-    result = _run_builder(tmp_path, path)
+    articles = tmp_path / "articles.jsonl"
+    _write_articles(articles, rows)
+    result, output, manifest = _run_builder(tmp_path, articles)
     assert result.returncode == 0, result.stderr
-    manifest = json.loads((tmp_path / "cf.manifest.json").read_text(encoding="utf-8"))
-    assert manifest["articles"]["seen"] == 3
-    assert manifest["articles"]["train_counted"] == 1
+    table = CorpusFrequencyTable.load(output)
+    assert table.surface_count("訓練") > 0
+    assert table.surface_count("開発") == 0
+    assert table.surface_count("試験") == 0
     assert manifest["articles"]["dev_test_skipped"] == 2
-    assert manifest["leak_audit"]["passed"] is True
-    assert manifest["leak_audit"]["counted_article_ids_intersecting_d1_dev_test"] == 0
-
-    table = CorpusFrequencyTable.load(tmp_path / "cf.bin")
-    # Only the train article's tokens were counted.
-    assert table.pair_count("きしゃ", "記者") > 0
-    assert table.pair_count("はし", "箸") == 0
-    assert table.pair_count("あめ", "雨") == 0
-    assert table.total_tokens == sum(table.pair_counts)
 
 
-def test_builder_excludes_evaluation_overlapping_articles(tmp_path: Path) -> None:
-    ids = _find_article_ids_for_splits()
-    terms = load_exclusion_terms()
-    assert terms, "expected exclusion terms from data/evaluation_cases.jsonl"
-    term = max(terms, key=len)
-    train_id = ids["train"]
-    articles = [
-        {"id": train_id, "title": "overlap", "text": f"本文です。{term}です。"},
-        {"id": train_id, "title": "clean", "text": "記者は汽車を見送った。"},
-    ]
-    # Sanity: the first article must actually trip overlaps_evaluation.
-    assert overlaps_evaluation(articles[0]["text"], terms)
-    path = tmp_path / "articles.jsonl"
-    _write_articles(articles, path)
-    result = _run_builder(tmp_path, path)
+def test_evaluation_overlap_article_is_excluded(tmp_path: Path) -> None:
+    term = load_exclusion_terms()[0]
+    article_id = _article_id_for_split("train")
+    articles = tmp_path / "articles.jsonl"
+    _write_articles(articles, [{"id": article_id, "text": f"{term} 評価重複専用語彙。"}])
+    result, output, manifest = _run_builder(tmp_path, articles)
     assert result.returncode == 0, result.stderr
-    manifest = json.loads((tmp_path / "cf.manifest.json").read_text(encoding="utf-8"))
+    assert CorpusFrequencyTable.load(output).surface_count("評価") == 0
     assert manifest["articles"]["evaluation_overlap_skipped"] == 1
-    table = CorpusFrequencyTable.load(tmp_path / "cf.bin")
-    assert table.pair_count("きしゃ", "記者") > 0
-    # The overlapped article's unique token must not have been counted.
-    assert table.pair_count("みほん", "本文") == 0
+    assert manifest["articles"]["train_counted"] == 0
 
 
-def test_builder_does_not_depend_on_d1_jsonl_or_corpus_bin(tmp_path: Path) -> None:
-    # The builder must work with an empty d1 dir (leak audit finds nothing to
-    # intersect) and no corpus_freq_v1.bin present.
-    ids = _find_article_ids_for_splits()
-    articles = [
-        {"id": ids["train"], "title": "t", "text": "記者は汽車を見送った。"},
-    ]
-    path = tmp_path / "articles.jsonl"
-    _write_articles(articles, path)
+def test_leak_audit_fails_on_dirty_d1(tmp_path: Path) -> None:
+    article_id = _article_id_for_split("train")
+    articles = tmp_path / "articles.jsonl"
+    _write_articles(articles, [{"id": article_id, "text": "監査専用語彙。"}])
     d1_dir = tmp_path / "d1"
     d1_dir.mkdir()
-    result = _run_builder(tmp_path, path)
+    for split in ("train", "dev", "test"):
+        row = {"article_id": article_id if split == "dev" else f"other-{split}", "reading": "かんさ", "positive": "監査", "span_tokens": 1}
+        (d1_dir / f"{split}.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+    result, _, manifest = _run_builder(tmp_path, articles, d1_dir=d1_dir, allow_missing=False)
+    assert result.returncode != 0
+    assert manifest["leak_audit"]["passed"] is False
+    assert manifest["leak_audit"]["counted_article_ids_intersecting_d1_dev_test"] == 1
+
+
+def test_missing_d1_is_not_a_silent_pass(tmp_path: Path) -> None:
+    articles = tmp_path / "articles.jsonl"
+    _write_articles(articles, [{"id": _article_id_for_split("train"), "text": "監査専用語彙。"}])
+    d1_dir = tmp_path / "empty-d1"
+    d1_dir.mkdir()
+    failed, _, manifest = _run_builder(tmp_path, articles, d1_dir=d1_dir, allow_missing=False)
+    assert failed.returncode != 0
+    assert manifest["leak_audit"]["d1_available"] is False
+    passed, _, allowed_manifest = _run_builder(tmp_path / "allowed", articles, d1_dir=d1_dir, allow_missing=True)
+    assert passed.returncode == 0
+    assert allowed_manifest["leak_audit"]["d1_available"] is False
+    assert allowed_manifest["leak_audit"]["passed"] is False
+
+
+def test_marginals_are_consistent(tmp_path: Path) -> None:
+    articles = tmp_path / "articles.jsonl"
+    _write_articles(articles, [{"id": _article_id_for_split("train"), "text": "限界検査。"}])
+    result, output, manifest = _run_builder(tmp_path, articles)
     assert result.returncode == 0, result.stderr
-    manifest = json.loads((tmp_path / "cf.manifest.json").read_text(encoding="utf-8"))
-    assert manifest["leak_audit"]["d1_dev_test_article_ids"] == 0
-    assert manifest["leak_audit"]["passed"] is True
-    assert manifest["coverage"].get("error", "").endswith("coverage_pairs.jsonl") or (
-        manifest["coverage"]["d1_test_gold_pairs"] == 0
-    )
+    table = CorpusFrequencyTable.load(output)
+    assert manifest["counts"]["marginals_consistent"] is True
+    assert sum(table.reading_count(reading) for reading, _ in table._readings) == table.total_tokens
+    assert sum(table.surface_count(surface) for surface, _ in table._surfaces) == table.total_tokens

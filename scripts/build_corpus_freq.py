@@ -1,32 +1,29 @@
 #!/usr/bin/env python3
-"""Build the (reading, surface) corpus frequency table from train-split articles only.
-
-Leakage policy (PLAN §3.4, issue #19 comment §4):
-* Split assignment is imported from build_d1_data.article_split -- never re-derived.
-* Articles overlapping the evaluation suites (AJIMEE / handmade) are excluded via
-  build_d1_data.overlaps_evaluation before counting.
-* After counting, every counted article id is checked against the article ids
-  actually present in data/d1/dev.jsonl and data/d1/test.jsonl; any intersection
-  aborts the build with a non-zero exit.
-"""
+"""Build a train-article-only (reading, surface) frequency table."""
 
 from __future__ import annotations
 
 import argparse
-import json
-import sys
 from collections import Counter
 from datetime import date
+import hashlib
+import json
+import os
 from pathlib import Path
+import platform
+import subprocess
+import sys
+import time
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS_ROOT = REPOSITORY_ROOT / "scripts"
-SRC_ROOT = REPOSITORY_ROOT / "src"
-for path in (str(SCRIPTS_ROOT), str(SRC_ROOT)):
-    if path not in sys.path:
-        sys.path.insert(0, path)
+sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
+sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from build_d1_data import (  # noqa: E402
+    DEFAULT_CONFIG,
+    DEFAULT_DATASET,
+    DEFAULT_REVISION,
+    _SPLIT_RANGES,
     article_split,
     iter_hf_articles,
     iter_jsonl_articles,
@@ -36,125 +33,122 @@ from build_d1_data import (  # noqa: E402
 )
 from beme.corpus_freq import CorpusFrequencyTable  # noqa: E402
 
-DEFAULT_DATASET = "wikimedia/wikipedia"
-DEFAULT_CONFIG = "20231101.ja"
-DEFAULT_REVISION = "b04c8d1ceb2f5cd4588862100d08de323dccfbaa"
-DEFAULT_SPLIT_SEED = 20260822
-DEFAULT_TARGET_BYTES = 100 * 1024 * 1024
-DEFAULT_OUTPUT = REPOSITORY_ROOT / "data" / "corpus_freq_v1.bin"
-DEFAULT_MANIFEST = REPOSITORY_ROOT / "data" / "corpus_freq_v1.manifest.json"
-DEFAULT_D1_DIR = REPOSITORY_ROOT / "data" / "d1"
-DEFAULT_COVERAGE_PAIRS = (
-    REPOSITORY_ROOT / "artifacts" / "issue19" / "s-measurement" / "coverage_pairs.jsonl"
-)
+
+def _jsonl_pairs(path: Path) -> Counter[tuple[str, str]]:
+    counts: Counter[tuple[str, str]] = Counter()
+    if not path.is_file():
+        return counts
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line:
+            row = json.loads(line)
+            surface_key = "positive" if "positive" in row else "surface"
+            counts[(str(row["reading"]), str(row[surface_key]))] += int(row.get("count", 1))
+    return counts
 
 
-def _make_tagger():
+def _coverage(table: CorpusFrequencyTable, d1_dir: Path, coverage_path: Path) -> tuple[dict[str, object], bool]:
+    split_pairs = {name: _jsonl_pairs(d1_dir / f"{name}.jsonl") for name in ("train", "dev", "test")}
+    test_pairs = split_pairs["test"]
+    train_pairs = split_pairs["train"]
+
+    def weighted(pairs: Counter[tuple[str, str]], predicate) -> tuple[int, int, float]:
+        total = sum(pairs.values())
+        seen = sum(count for pair, count in pairs.items() if predicate(pair))
+        return seen, total, seen / total if total else 0.0
+
+    pair_seen, pair_total, pair_rate = weighted(test_pairs, lambda pair: table.pair_count(*pair) > 0)
+    surface_seen, _, surface_rate = weighted(test_pairs, lambda pair: table.surface_count(pair[1]) > 0)
+    train_seen, train_total, train_rate = weighted(train_pairs, lambda pair: table.pair_count(*pair) > 0)
+    span1_pairs: Counter[tuple[str, str]] = Counter()
+    test_path = d1_dir / "test.jsonl"
+    if test_path.is_file():
+        for line in test_path.read_text(encoding="utf-8").splitlines():
+            if line:
+                row = json.loads(line)
+                if row.get("span_tokens") == 1:
+                    span1_pairs[(str(row["reading"]), str(row["positive"]))] += 1
+    span1_seen, span1_total, span1_rate = weighted(span1_pairs, lambda pair: table.pair_count(*pair) > 0)
+
+    coverage_match: bool | None = None
+    coverage_sha: str | None = None
+    if coverage_path.is_file():
+        raw = coverage_path.read_bytes()
+        coverage_sha = hashlib.sha256(raw).hexdigest()
+        reference = _jsonl_pairs(coverage_path)
+        coverage_match = reference == train_pairs + test_pairs
+        if not coverage_match:
+            raise RuntimeError("coverage-pairs.jsonl does not match d1 train/test gold pairs")
+    result = {
+        "d1_test_gold_pairs": pair_total,
+        "d1_test_gold_pairs_seen": pair_seen,
+        "d1_test_gold_pair_coverage": pair_rate,
+        "d1_test_gold_surfaces_seen": surface_seen,
+        "d1_test_gold_surface_coverage": surface_rate,
+        "d1_train_gold_pair_coverage": train_rate,
+        "d1_test_gold_pair_coverage_span1_only": span1_rate,
+        "d1_test_gold_pair_coverage_span1_seen": span1_seen,
+        "d1_test_gold_pair_coverage_span1_total": span1_total,
+        "d1_train_gold_pairs": train_total,
+        "source": "recomputed from data/d1/{train,test}.jsonl (reading, positive); cross-checked against coverage_pairs.jsonl",
+        "coverage_pairs_sha256": coverage_sha,
+        "coverage_pairs_match": coverage_match,
+    }
+    return result, bool(split_pairs["train"] or split_pairs["test"])
+
+
+def _d1_audit(d1_dir: Path, counted: set[str], seed: int, allow_missing: bool) -> tuple[dict[str, object], bool]:
+    paths = [d1_dir / f"{name}.jsonl" for name in ("train", "dev", "test")]
+    available = all(path.is_file() for path in paths)
+    if available:
+        d1_ids = {
+            str(json.loads(line)["article_id"])
+            for path in (paths[1], paths[2])
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line
+        }
+        intersection = counted & d1_ids
+        misclassified = {article_id for article_id in d1_ids if article_split(article_id, seed) == "train"}
+    else:
+        d1_ids, intersection, misclassified = set(), set(), set()
+    passed = available and not intersection and not misclassified
+    audit = {
+        "d1_dev_test_article_ids": len(d1_ids),
+        "counted_article_ids_intersecting_d1_dev_test": len(intersection),
+        "d1_dev_test_article_ids_misclassified_as_train": len(misclassified),
+        "d1_available": available,
+        "passed": passed,
+    }
+    return audit, passed or (allow_missing and not available)
+
+
+def build(args: argparse.Namespace) -> tuple[dict[str, object], int]:
     try:
         from fugashi import GenericTagger
         import ipadic
     except ImportError as error:
         raise RuntimeError("fugashi and ipadic are required; run 'uv sync --group dev'") from error
-    return GenericTagger(f"-r /dev/null -d {ipadic.DICDIR}")
-
-
-def _d1_dev_test_ids(d1_dir: Path) -> set[str]:
-    ids: set[str] = set()
-    for name in ("dev", "test"):
-        path = d1_dir / f"{name}.jsonl"
-        if not path.exists():
-            continue
-        with path.open(encoding="utf-8") as handle:
-            for line in handle:
-                if line.strip():
-                    ids.add(json.loads(line)["article_id"])
-    return ids
-
-
-def _coverage_from_pairs(
-    pairs_path: Path, table: CorpusFrequencyTable, d1_dir: Path
-) -> dict[str, object]:
-    """Fill the coverage block from task1's coverage_pairs.jsonl (no d1 rescan)."""
-    if not pairs_path.exists():
-        return {
-            "error": f"coverage_pairs.jsonl not found: {pairs_path}",
-            "d1_test_gold_pairs": 0,
-            "d1_test_gold_pairs_seen": 0,
-            "d1_test_gold_pair_coverage": 0.0,
-            "d1_test_gold_surfaces_seen": 0,
-            "d1_test_gold_surface_coverage": 0.0,
-            "d1_train_gold_pair_coverage": 0.0,
-        }
-    test_pairs: Counter[tuple[str, str]] = Counter()
-    train_pairs: Counter[tuple[str, str]] = Counter()
-    for split, target in (("test", test_pairs), ("train", train_pairs)):
-        path = d1_dir / f"{split}.jsonl"
-        if not path.exists():
-            continue
-        with path.open(encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                row = json.loads(line)
-                target[(row["reading"], row["positive"])] += 1
-    test_total = sum(test_pairs.values())
-    train_total = sum(train_pairs.values())
-    test_seen_pairs = sum(
-        count for pair, count in test_pairs.items() if table.pair_count(*pair) > 0
-    )
-    test_seen_surfaces = sum(
-        count for pair, count in test_pairs.items() if table.pair_count(*pair) > 0
-    )
-    train_seen_pairs = sum(
-        count for pair, count in train_pairs.items() if table.pair_count(*pair) > 0
-    )
-    return {
-        "d1_test_gold_pairs": test_total,
-        "d1_test_gold_pairs_seen": test_seen_pairs,
-        "d1_test_gold_pair_coverage": test_seen_pairs / test_total if test_total else 0.0,
-        "d1_test_gold_surfaces_seen": test_seen_surfaces,
-        "d1_test_gold_surface_coverage": (
-            test_seen_surfaces / test_total if test_total else 0.0
-        ),
-        "d1_train_gold_pair_coverage": train_seen_pairs / train_total if train_total else 0.0,
-    }
-
-
-def build(args: argparse.Namespace) -> dict[str, object]:
-    tagger = _make_tagger()
+    tagger = GenericTagger(f"-r /dev/null -d {ipadic.DICDIR}")
     exclusion_terms = load_exclusion_terms()
-    source = (
-        iter_jsonl_articles(args.articles_jsonl)
-        if args.articles_jsonl
-        else iter_hf_articles(args.dataset, args.config, args.revision)
-    )
-
+    source = iter_jsonl_articles(args.articles_jsonl) if args.articles_jsonl else iter_hf_articles(args.dataset, args.config, args.revision)
     pair_counts: Counter[tuple[str, str]] = Counter()
     surface_counts: Counter[str] = Counter()
-    counted_article_ids: set[str] = set()
-    total_tokens = 0
-    bytes_seen = 0
-    seen = 0
-    train_counted = 0
-    dev_test_skipped = 0
-    evaluation_overlap_skipped = 0
-
+    counted_ids: set[str] = set()
+    bytes_seen = articles_seen = train_counted = overlap_skipped = dev_test_skipped = total_tokens = 0
+    started = time.perf_counter()
     for article in source:
-        if args.max_articles is not None and seen >= args.max_articles:
-            break
         encoded_bytes = len(article.text.encode("utf-8"))
         if bytes_seen and bytes_seen + encoded_bytes > args.target_bytes:
             break
-        # Skipped articles still count toward the scanned window (fetch_corpus.py
-        # convention), so the window stays aligned with d1's.
         bytes_seen += encoded_bytes
-        seen += 1
+        articles_seen += 1
         if overlaps_evaluation(article.text, exclusion_terms):
-            evaluation_overlap_skipped += 1
+            overlap_skipped += 1
             continue
         if article_split(article.article_id, args.split_seed) != "train":
             dev_test_skipped += 1
             continue
+        train_counted += 1
+        counted_ids.add(article.article_id)
         for node in tagger(article.text):
             reading = node_reading(node)
             if reading is None:
@@ -162,104 +156,70 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             pair_counts[(reading, node.surface)] += 1
             surface_counts[node.surface] += 1
             total_tokens += 1
-        counted_article_ids.add(article.article_id)
-        train_counted += 1
-        if train_counted % 100 == 0:
-            print(
-                f"progress counted={train_counted} bytes={bytes_seen} "
-                f"pairs={len(pair_counts)}",
-                file=sys.stderr,
-                flush=True,
-            )
-
+        if args.progress_every and articles_seen % args.progress_every == 0:
+            print(f"progress articles={articles_seen} train={train_counted} bytes={bytes_seen}", file=sys.stderr, flush=True)
+        if args.max_articles is not None and articles_seen >= args.max_articles:
+            break
     table = CorpusFrequencyTable.from_counts(pair_counts, surface_counts, total_tokens)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    table_sha256 = table.dump(args.output)
-
-    # -- leak audit against the d1 dev/test article ids --------------------
-    d1_ids = _d1_dev_test_ids(args.d1_dir)
-    intersection = counted_article_ids & d1_ids
-    leak_passed = not intersection
+    table_sha = table.dump(args.output)
+    audit, audit_status = _d1_audit(args.d1_dir, counted_ids, args.split_seed, args.allow_missing_d1)
+    coverage, _ = _coverage(table, args.d1_dir, args.coverage_pairs)
+    try:
+        git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPOSITORY_ROOT, text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        git_commit = "unknown"
     manifest = {
         "schema_version": 1,
-        "created_on": date.today().isoformat(),
-        "source": {
-            "dataset": args.dataset,
-            "config": args.config,
-            "revision": args.revision,
-            "utf8_bytes_scanned": bytes_seen,
-            "bytes_count_includes_skipped_articles": True,
-        },
-        "split": {
-            "algorithm": "sha256(seed:article_id) modulo 10000",
-            "seed": args.split_seed,
-            "train_upper": 7700,
-        },
-        "articles": {
-            "seen": seen,
-            "train_counted": train_counted,
-            "dev_test_skipped": dev_test_skipped,
-            "evaluation_overlap_skipped": evaluation_overlap_skipped,
-        },
-        "counts": {
-            "total_tokens": total_tokens,
-            "unique_pairs": len(pair_counts),
-            "unique_surfaces": len(surface_counts),
-            "unique_readings": len({reading for reading, _ in pair_counts}),
-        },
-        "leak_audit": {
-            "d1_dev_test_article_ids": len(d1_ids),
-            "counted_article_ids_intersecting_d1_dev_test": len(intersection),
-            "passed": leak_passed,
-        },
-        "coverage": _coverage_from_pairs(args.coverage_pairs, table, args.d1_dir),
-        "table_sha256": table_sha256,
+        "created_on": str(date.today()),
+        "source": {"dataset": args.dataset, "config": args.config, "revision": args.revision, "utf8_bytes_scanned": bytes_seen,
+                   "byte_accounting": "build_d1_data: every article counted before filtering; break before exceeding target; articles are never truncated"},
+        "split": {"algorithm": "sha256(seed:article_id) modulo 10000", "seed": args.split_seed, "train_upper": _SPLIT_RANGES[0][1]},
+        "articles": {"seen": articles_seen, "train_counted": train_counted, "dev_test_skipped": dev_test_skipped, "evaluation_overlap_skipped": overlap_skipped},
+        "counts": {"total_tokens": total_tokens, "unique_pairs": len(pair_counts), "unique_surfaces": len(surface_counts), "unique_readings": len(table._readings),
+                   "marginals_consistent": sum(pair_counts.values()) == total_tokens and all(sum(count for (r, s), count in pair_counts.items() if s == surface) == count for surface, count in surface_counts.items())},
+        "leak_audit": audit,
+        "coverage": coverage,
+        "table_sha256": table_sha,
+        "environment": {"git_commit": git_commit, "python": platform.python_version(), "host": platform.node()},
     }
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
-    args.manifest.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    return manifest
+    args.manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return manifest, 0 if audit_status else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--output", type=Path, default=REPOSITORY_ROOT / "data/corpus_freq_v1.bin")
+    parser.add_argument("--manifest", type=Path, default=REPOSITORY_ROOT / "data/corpus_freq_v1.manifest.json")
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--revision", default=DEFAULT_REVISION)
-    parser.add_argument("--target-bytes", type=int, default=DEFAULT_TARGET_BYTES)
-    parser.add_argument("--max-articles", type=int, default=None)
-    parser.add_argument("--split-seed", type=int, default=DEFAULT_SPLIT_SEED)
-    parser.add_argument("--articles-jsonl", type=Path, default=None)
-    parser.add_argument("--d1-dir", type=Path, default=DEFAULT_D1_DIR)
-    parser.add_argument(
-        "--coverage-pairs", type=Path, default=DEFAULT_COVERAGE_PAIRS
-    )
+    parser.add_argument("--target-bytes", type=int, default=100 * 1024 * 1024)
+    parser.add_argument("--max-articles", type=int)
+    parser.add_argument("--split-seed", type=int, default=20260822)
+    parser.add_argument("--articles-jsonl", type=Path)
+    parser.add_argument("--d1-dir", type=Path, default=REPOSITORY_ROOT / "data/d1")
+    parser.add_argument("--coverage-pairs", type=Path, default=REPOSITORY_ROOT / "artifacts/issue19/s-measurement/coverage_pairs.jsonl")
+    parser.add_argument("--allow-missing-d1", action="store_true")
+    parser.add_argument("--progress-every", type=int, default=100)
+    parser.add_argument("--json", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.target_bytes <= 0:
-        raise SystemExit("--target-bytes must be positive")
-    manifest = build(args)
-    if not manifest["leak_audit"]["passed"]:  # type: ignore[index]
-        raise SystemExit(
-            "leak audit failed: counted articles intersect d1 dev/test; "
-            f"see {args.manifest}"
-        )
-    print(f"Wrote {args.output} (sha256 {manifest['table_sha256']})")
-    print(f"manifest -> {args.manifest}")
-    return 0
+    if args.target_bytes <= 0 or args.progress_every < 0 or args.max_articles is not None and args.max_articles <= 0:
+        raise SystemExit("target bytes and max articles must be positive; progress interval must be non-negative")
+    manifest, status = build(args)
+    print(json.dumps(manifest, ensure_ascii=False, sort_keys=True) if args.json else f"Wrote corpus frequency table to {args.output}")
+    return status
 
 
 if __name__ == "__main__":
-    status = main()
-    sys.stdout.flush()
-    sys.stderr.flush()
-    import os
-
-    os._exit(status)
+    args = sys.argv[1:]
+    status = main(args)
+    if "--articles-jsonl" not in args:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(status)
+    raise SystemExit(status)
