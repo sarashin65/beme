@@ -63,11 +63,26 @@ def _article_id_for_split(split: str, seed: int = 20260822) -> str:
     raise AssertionError(f"could not find {split} article id")
 
 
+def _article_ids_for_split(split: str, n: int = 1, seed: int = 20260822) -> list[str]:
+    found: list[str] = []
+    for number in range(1_000_000):
+        article_id = f"synthetic-{split}-{number}"
+        if article_split(article_id, seed) == split and article_id not in found:
+            found.append(article_id)
+            if len(found) == n:
+                return found
+    raise AssertionError(f"could not find {n} {split} article ids")
+
+
 def _write_articles(path: Path, rows: list[dict[str, str]]) -> None:
     path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
 
 
-def _run_builder(tmp_path: Path, articles: Path, *, d1_dir: Path | None = None, allow_missing: bool = True):
+def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
+    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+
+
+def _run_builder(tmp_path: Path, articles: Path, *, d1_dir: Path | None = None, coverage_pairs: Path | None = None, allow_missing: bool = True):
     tmp_path.mkdir(parents=True, exist_ok=True)
     output = tmp_path / "table.bin"
     manifest = tmp_path / "manifest.json"
@@ -83,7 +98,7 @@ def _run_builder(tmp_path: Path, articles: Path, *, d1_dir: Path | None = None, 
         "--d1-dir",
         str(d1_dir or tmp_path / "d1"),
         "--coverage-pairs",
-        str(tmp_path / "no-coverage-pairs.jsonl"),
+        str(coverage_pairs or tmp_path / "no-coverage-pairs.jsonl"),
         "--progress-every",
         "0",
     ]
@@ -161,3 +176,58 @@ def test_marginals_are_consistent(tmp_path: Path) -> None:
     assert manifest["counts"]["marginals_consistent"] is True
     assert sum(table.reading_count(reading) for reading, _ in table._readings) == table.total_tokens
     assert sum(table.surface_count(surface) for surface, _ in table._surfaces) == table.total_tokens
+
+
+def _build_coverage_fixture(tmp_path: Path, *, mismatch: bool) -> tuple[Path, Path, Path, Path]:
+    train_id = _article_id_for_split("train")
+    dev_id = _article_id_for_split("dev")
+    test_ids = _article_ids_for_split("test", 2)
+    train_article = tmp_path / "articles.jsonl"
+    _write_articles(train_article, [{"id": train_id, "text": "日本語の読み書きを練習する。"}])
+    d1_dir = tmp_path / "d1"
+    d1_dir.mkdir()
+    _write_jsonl(d1_dir / "train.jsonl", [
+        {"article_id": train_id, "reading": "にほんご", "positive": "日本語", "span_tokens": 1},
+        {"article_id": train_id, "reading": "よみかき", "positive": "読み書き", "span_tokens": 1},
+    ])
+    _write_jsonl(d1_dir / "dev.jsonl", [
+        {"article_id": dev_id, "reading": "かぞえる", "positive": "数える", "span_tokens": 1},
+    ])
+    _write_jsonl(d1_dir / "test.jsonl", [
+        {"article_id": test_ids[0], "reading": "にほんご", "positive": "日本語", "span_tokens": 1},
+        {"article_id": test_ids[1], "reading": "いぬ", "positive": "犬", "span_tokens": 2},
+    ])
+    coverage_pairs = tmp_path / "coverage_pairs.jsonl"
+    if mismatch:
+        _write_jsonl(coverage_pairs, [
+            {"reading": "にほんご", "positive": "日本語", "count": 1},
+            {"reading": "よみかき", "positive": "読み書き", "count": 1},
+        ])
+    else:
+        _write_jsonl(coverage_pairs, [
+            {"reading": "にほんご", "positive": "日本語", "count": 1},
+            {"reading": "にほんご", "positive": "日本語", "count": 1},
+            {"reading": "よみかき", "positive": "読み書き", "count": 1},
+            {"reading": "いぬ", "positive": "犬", "count": 1},
+        ])
+    return train_article, d1_dir, coverage_pairs, tmp_path / "manifest.json"
+
+
+def test_coverage_pair_rates_are_recomputed(tmp_path: Path) -> None:
+    train_article, d1_dir, coverage_pairs, manifest_path = _build_coverage_fixture(tmp_path, mismatch=False)
+    result, output, manifest = _run_builder(tmp_path, train_article, d1_dir=d1_dir, coverage_pairs=coverage_pairs)
+    assert result.returncode == 0, result.stderr
+    coverage = manifest["coverage"]
+    assert coverage["d1_test_gold_pair_coverage"] == 0.5
+    assert coverage["d1_test_gold_pair_coverage_span1_only"] == 1.0
+    assert coverage["d1_test_gold_pairs"] == 2
+    assert coverage["coverage_pairs_match"] is True
+    assert (tmp_path / "table.bin").exists()
+
+
+def test_coverage_mismatch_fails_nonzero_exit(tmp_path: Path) -> None:
+    train_article, d1_dir, coverage_pairs, manifest_path = _build_coverage_fixture(tmp_path, mismatch=True)
+    result, output, manifest = _run_builder(tmp_path, train_article, d1_dir=d1_dir, coverage_pairs=coverage_pairs)
+    assert result.returncode != 0
+    assert manifest["coverage"]["coverage_pairs_match"] is False
+    assert not output.exists()

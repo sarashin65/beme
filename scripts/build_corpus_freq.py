@@ -76,8 +76,6 @@ def _coverage(table: CorpusFrequencyTable, d1_dir: Path, coverage_path: Path) ->
         coverage_sha = hashlib.sha256(raw).hexdigest()
         reference = _jsonl_pairs(coverage_path)
         coverage_match = reference == train_pairs + test_pairs
-        if not coverage_match:
-            raise RuntimeError("coverage-pairs.jsonl does not match d1 train/test gold pairs")
     result = {
         "d1_test_gold_pairs": pair_total,
         "d1_test_gold_pairs_seen": pair_seen,
@@ -93,7 +91,8 @@ def _coverage(table: CorpusFrequencyTable, d1_dir: Path, coverage_path: Path) ->
         "coverage_pairs_sha256": coverage_sha,
         "coverage_pairs_match": coverage_match,
     }
-    return result, bool(split_pairs["train"] or split_pairs["test"])
+    coverage_ok = coverage_match is None or coverage_match
+    return result, coverage_ok
 
 
 def _d1_audit(d1_dir: Path, counted: set[str], seed: int, allow_missing: bool) -> tuple[dict[str, object], bool]:
@@ -161,13 +160,18 @@ def build(args: argparse.Namespace) -> tuple[dict[str, object], int]:
         if args.max_articles is not None and articles_seen >= args.max_articles:
             break
     table = CorpusFrequencyTable.from_counts(pair_counts, surface_counts, total_tokens)
-    table_sha = table.dump(args.output)
+    tmp_output = args.output.with_suffix(".bin.tmp")
+    table_sha = table.dump(tmp_output)
     audit, audit_status = _d1_audit(args.d1_dir, counted_ids, args.split_seed, args.allow_missing_d1)
-    coverage, _ = _coverage(table, args.d1_dir, args.coverage_pairs)
+    coverage, coverage_ok = _coverage(table, args.d1_dir, args.coverage_pairs)
     try:
         git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPOSITORY_ROOT, text=True).strip()
     except (OSError, subprocess.CalledProcessError):
         git_commit = "unknown"
+    from_pairs = Counter()
+    for (reading, surface), count in pair_counts.items():
+        from_pairs[surface] += count
+    marginals_consistent = from_pairs == surface_counts and sum(pair_counts.values()) == total_tokens
     manifest = {
         "schema_version": 1,
         "created_on": str(date.today()),
@@ -176,7 +180,7 @@ def build(args: argparse.Namespace) -> tuple[dict[str, object], int]:
         "split": {"algorithm": "sha256(seed:article_id) modulo 10000", "seed": args.split_seed, "train_upper": _SPLIT_RANGES[0][1]},
         "articles": {"seen": articles_seen, "train_counted": train_counted, "dev_test_skipped": dev_test_skipped, "evaluation_overlap_skipped": overlap_skipped},
         "counts": {"total_tokens": total_tokens, "unique_pairs": len(pair_counts), "unique_surfaces": len(surface_counts), "unique_readings": len(table._readings),
-                   "marginals_consistent": sum(pair_counts.values()) == total_tokens and all(sum(count for (r, s), count in pair_counts.items() if s == surface) == count for surface, count in surface_counts.items())},
+                   "marginals_consistent": marginals_consistent},
         "leak_audit": audit,
         "coverage": coverage,
         "table_sha256": table_sha,
@@ -184,7 +188,13 @@ def build(args: argparse.Namespace) -> tuple[dict[str, object], int]:
     }
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     args.manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return manifest, 0 if audit_status else 1
+    if audit_status and coverage_ok:
+        os.replace(tmp_output, args.output)
+    else:
+        tmp_output.unlink(missing_ok=True)
+        if args.output.exists():
+            args.output.unlink()
+    return manifest, 0 if (audit_status and coverage_ok) else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
