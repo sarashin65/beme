@@ -13,6 +13,13 @@ VERSION = 1
 DEFAULT_CORPUS_FREQ_PATH = Path(__file__).resolve().parents[2] / "data" / "corpus_freq_v1.bin"
 _HEADER = struct.Struct("<7sBHHQIII")
 
+# Temperature that scales the corpus log-probability features into the same
+# range as the other lexical features (see issue #19 F2, PLAN section 3.3).
+# The local model minimizes cost and every lexical feature is oriented so that
+# larger means worse, so the features emit negative log probabilities divided
+# by this constant.  Fixed before training; never adjusted afterwards.
+CORPUS_LOGPROB_TEMPERATURE = 10.0
+
 
 @dataclass(frozen=True, slots=True)
 class CorpusFrequencyTable:
@@ -161,4 +168,4 @@ class CorpusFrequencyTable:
         return digest
 
 
-__all__ = ["CorpusFrequencyTable", "DEFAULT_CORPUS_FREQ_PATH", "MAGIC", "VERSION"]
+__all__ = ["CORPUS_LOGPROB_TEMPERATURE", "CorpusFrequencyTable", "DEFAULT_CORPUS_FREQ_PATH", "MAGIC", "VERSION"]

@@ -9,9 +9,11 @@ import math
 from typing import TYPE_CHECKING, Hashable, NamedTuple
 import unicodedata
 
+from .corpus_freq import CORPUS_LOGPROB_TEMPERATURE
 from .lattice import LatticeEdge
 
 if TYPE_CHECKING:
+    from .corpus_freq import CorpusFrequencyTable
     from .lattice import LatticePath
     from .weights import Weights
 
@@ -91,11 +93,18 @@ class FeatureExtractor:
         self,
         spec: FeatureSpec = LEGACY_V1_SPEC,
         reading_conditional: Mapping[str, tuple[float, int]] | None = None,
+        *,
+        corpus_frequency: "CorpusFrequencyTable | None" = None,
     ) -> None:
         if not isinstance(spec, FeatureSpec):
             raise TypeError("spec must be a FeatureSpec")
         self.spec = spec
         self.reading_conditional = reading_conditional
+        self.corpus_frequency = corpus_frequency
+        # Whether the active spec declares corpus features.  The 340k-pair
+        # table itself is resolved lazily inside lexical_features (matrix
+        # style), never loaded for the other specifications.
+        self._needs_corpus = bool(set(spec.lexical_features) & set(CORPUS_LEXICAL_FEATURES))
 
     def lexical_features(self, edge: LatticeEdge) -> dict[str, float]:
         if self.spec.family == "decomposed_v1":
@@ -158,6 +167,39 @@ class FeatureExtractor:
                         token.raw_cost / READING_CONDITIONAL_TEMPERATURE + log_partition
                     )
                 features["lex.reading_candidate_count"] = math.log1p(count)
+            if self._needs_corpus:
+                # Lazy singleton (matrix style): resolve the table only on
+                # first use, and only for specs that declare corpus features.
+                table = self.corpus_frequency
+                if table is None:
+                    try:
+                        table = _corpus_table()
+                    except FileNotFoundError as error:
+                        # An explicit table was not injected and the default
+                        # file does not exist: fail loudly instead of scoring
+                        # every edge as unseen (issue #19 F2).
+                        raise ValueError(
+                            "corpus frequency table is required for this feature specification"
+                        ) from error
+                pair_count = table.pair_count(token.reading, token.surface)
+                reading_count = table.reading_count(token.reading)
+                surface_count = table.surface_count(token.surface)
+                # Values are negative log probabilities (cost-oriented, like
+                # every other lexical feature), not log probabilities.
+                if pair_count > 0 and reading_count > 0:
+                    features["lex.corpus_reading_cond_logprob"] = (
+                        -math.log(pair_count / reading_count) / CORPUS_LOGPROB_TEMPERATURE
+                    )
+                    features["lex.corpus_unseen"] = 0.0
+                else:
+                    features["lex.corpus_reading_cond_logprob"] = 0.0
+                    features["lex.corpus_unseen"] = 1.0
+                if surface_count > 0 and table.total_tokens > 0:
+                    features["lex.corpus_unigram_logprob"] = (
+                        -math.log(surface_count / table.total_tokens) / CORPUS_LOGPROB_TEMPERATURE
+                    )
+                else:
+                    features["lex.corpus_unigram_logprob"] = 0.0
             return {name: value for name, value in features.items()
                     if name in self.spec.lexical_features}
         if self.spec.family != "legacy_v1":
@@ -228,6 +270,13 @@ def _matrix_table():
     return MatrixCostTable.load(DEFAULT_MATRIX_PATH)
 
 
+@lru_cache(maxsize=1)
+def _corpus_table():
+    from .corpus_freq import DEFAULT_CORPUS_FREQ_PATH, CorpusFrequencyTable
+
+    return CorpusFrequencyTable.load(DEFAULT_CORPUS_FREQ_PATH)
+
+
 MATRIX_V1_SPEC = FeatureSpec(
     "decomposed_v1+matrix_v1",
     DECOMPOSED_V1_SPEC.lexical_features,
@@ -267,6 +316,25 @@ MATRIX_FREQ_V1_SPEC = FeatureSpec(
     MATRIX_V1_SPEC.transition_state,
 )
 
+# Corpus-frequency lexical features (issue #19 F2).  Values are negative log
+# probabilities divided by CORPUS_LOGPROB_TEMPERATURE, i.e. cost-oriented like
+# every other lexical feature; larger means worse.  No smoothing: the constant
+# offset for unseen pairs is carried by the learned weight of
+# lex.corpus_unseen.
+CORPUS_LEXICAL_FEATURES = (
+    "lex.corpus_reading_cond_logprob",
+    "lex.corpus_unigram_logprob",
+    "lex.corpus_unseen",
+)
+# C1: the issue #19 comment's condition (A0 + 3): 14 lexical + 16 transition
+# + 3 corpus = 33 parameters, kept for the A0/A8 contrast.
+CORPUS_V1_A0_SPEC = FeatureSpec(
+    "decomposed_v1+corpus_v1",
+    (*DECOMPOSED_V1_SPEC.lexical_features, *CORPUS_LEXICAL_FEATURES),
+    DECOMPOSED_V1_SPEC.transition_features,
+    DECOMPOSED_V1_SPEC.family,
+)
+
 
 _ABLATION_REMOVALS = {
     "decomposed_v1-lex_only": set(DECOMPOSED_V1_SPEC.transition_features),
@@ -286,6 +354,18 @@ _ABLATION_REMOVALS = {
         "lex.surface_len", "lex.proper_noun",
     },
 }
+_A8_BASE = _spec_without(
+    DECOMPOSED_V1_SPEC, "decomposed_v1-no_script-surface_len",
+    _ABLATION_REMOVALS["decomposed_v1-no_script-surface_len"],
+)
+# C0: the current base is A8 (issue #17 / commit a4b690b), so the corpus
+# features stack on A8: 9 lexical + 16 transition + 3 corpus = 28 parameters.
+CORPUS_V1_A8_SPEC = FeatureSpec(
+    "decomposed_v1-no_script-surface_len+corpus_v1",
+    (*_A8_BASE.lexical_features, *CORPUS_LEXICAL_FEATURES),
+    _A8_BASE.transition_features,
+    DECOMPOSED_V1_SPEC.family,
+)
 _SPEC_REGISTRY = {
     "legacy_v1": LEGACY_V1_SPEC,
     "decomposed_v1": DECOMPOSED_V1_SPEC,
@@ -298,6 +378,8 @@ _SPEC_REGISTRY = {
     FREQ_V1_SPEC.id: FREQ_V1_SPEC,
     FREQ_V1_NO_IPADIC_SPEC.id: FREQ_V1_NO_IPADIC_SPEC,
     MATRIX_FREQ_V1_SPEC.id: MATRIX_FREQ_V1_SPEC,
+    CORPUS_V1_A8_SPEC.id: CORPUS_V1_A8_SPEC,
+    CORPUS_V1_A0_SPEC.id: CORPUS_V1_A0_SPEC,
 }
 
 
@@ -311,8 +393,12 @@ def resolve_spec(spec_id: str) -> FeatureSpec:
 def extractor_for(
     spec_id: str,
     reading_conditional: Mapping[str, tuple[float, int]] | None = None,
+    *,
+    corpus_frequency: "CorpusFrequencyTable | None" = None,
 ) -> FeatureExtractor:
-    return FeatureExtractor(resolve_spec(spec_id), reading_conditional)
+    return FeatureExtractor(
+        resolve_spec(spec_id), reading_conditional, corpus_frequency=corpus_frequency
+    )
 
 
 def registered_spec_ids() -> tuple[str, ...]:

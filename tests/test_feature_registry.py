@@ -9,6 +9,7 @@ import sys
 
 import pytest
 
+from beme.corpus_freq import CorpusFrequencyTable
 from beme.features import (
     DECOMPOSED_V1_SPEC,
     FeatureExtractor,
@@ -25,6 +26,16 @@ from beme.weights import Weights
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _corpus_table() -> CorpusFrequencyTable:
+    # Tiny standalone table so the registry test does not depend on the
+    # untracked data/corpus_freq_v1.bin (see issue #19 task4 review M1).
+    return CorpusFrequencyTable.from_counts(
+        pairs={("きしゃ", "汽車"): 1},
+        surfaces={"汽車": 1},
+        total=1,
+    )
+
+
 def test_registry_contains_the_two_bases_and_eight_ablations() -> None:
     assert registered_spec_ids() == (
         "legacy_v1", "decomposed_v1", "decomposed_v1-lex_only",
@@ -34,6 +45,7 @@ def test_registry_contains_the_two_bases_and_eight_ablations() -> None:
         "decomposed_v1-no_shape", "decomposed_v1+matrix_v1",
         "decomposed_v1+matrix_v1-pos_pairs", "decomposed_v1+freq_v1",
         "decomposed_v1+freq_v1-no_ipadic_cost", "decomposed_v1+matrix_v1+freq_v1",
+        "decomposed_v1-no_script-surface_len+corpus_v1", "decomposed_v1+corpus_v1",
     )
 
 
@@ -46,8 +58,13 @@ def test_base_extractors_are_unchanged() -> None:
 
 @pytest.mark.parametrize("spec_id", registered_spec_ids()[2:])
 def test_ablation_outputs_are_declared(spec_id: str) -> None:
-    extractor = extractor_for(spec_id, {})
     edge = LatticeEdge(0, 2, Token("きしゃ", "汽車", "noun", 2.0, raw_cost=3500, source="ipadic"))
+    if spec_id.endswith("+corpus_v1"):
+        extractor = FeatureExtractor(
+            resolve_spec(spec_id), {}, corpus_frequency=_corpus_table()
+        )
+    else:
+        extractor = extractor_for(spec_id, {})
     lexical = extractor.lexical_features(edge)
     transition = extractor.transition_features(None, edge)
     assert set(lexical) <= set(extractor.spec.lexical_features)
