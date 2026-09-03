@@ -28,7 +28,11 @@ def main() -> int:
         values = {name: value for name, value in base.values.items() if name in known}
         if "trans.matrix_cost" in known:
             values["trans.matrix_cost"] = 0.0
-        for name in ("lex.reading_cond_logprob", "lex.reading_candidate_count"):
+        for name in (
+            "lex.reading_cond_logprob", "lex.reading_candidate_count",
+            "lex.corpus_reading_cond_logprob", "lex.corpus_unigram_logprob",
+            "lex.corpus_unseen",
+        ):
             if name in known:
                 values[name] = 0.0
         Weights(values, base.default_weight, spec_id, base.metadata).dump(

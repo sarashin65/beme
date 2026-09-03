@@ -1,0 +1,57 @@
+{
+  "articles": {
+    "dev_test_skipped": 1204,
+    "evaluation_overlap_skipped": 3,
+    "seen": 5104,
+    "train_counted": 3897
+  },
+  "counts": {
+    "marginals_consistent": true,
+    "total_tokens": 11646065,
+    "unique_pairs": 95987,
+    "unique_readings": 64389,
+    "unique_surfaces": 93689
+  },
+  "coverage": {
+    "coverage_pairs_match": true,
+    "coverage_pairs_sha256": "227f75c0a81f5fb149266b3ff86e2e4d37eb8e2e9db573d4497263a799373f87",
+    "d1_test_gold_pair_coverage": 0.856,
+    "d1_test_gold_pair_coverage_span1_only": 0.9895953757225433,
+    "d1_test_gold_pair_coverage_span1_seen": 1712,
+    "d1_test_gold_pair_coverage_span1_total": 1730,
+    "d1_test_gold_pairs": 2000,
+    "d1_test_gold_pairs_seen": 1712,
+    "d1_test_gold_surface_coverage": 0.856,
+    "d1_test_gold_surfaces_seen": 1712,
+    "d1_train_gold_pair_coverage": 0.8156,
+    "d1_train_gold_pairs": 10000,
+    "source": "recomputed from data/d1/{train,test}.jsonl (reading, positive); cross-checked against coverage_pairs.jsonl"
+  },
+  "created_on": "2026-08-29",
+  "environment": {
+    "git_commit": "ecb3f346acf725ee88fdf06bf6302195fc5397f3",
+    "host": "WIN-I7DHB6T7L79",
+    "python": "3.13.5"
+  },
+  "leak_audit": {
+    "counted_article_ids_intersecting_d1_dev_test": 0,
+    "d1_available": true,
+    "d1_dev_test_article_ids": 194,
+    "d1_dev_test_article_ids_misclassified_as_train": 0,
+    "passed": true
+  },
+  "schema_version": 1,
+  "source": {
+    "byte_accounting": "build_d1_data: every article counted before filtering; break before exceeding target; articles are never truncated",
+    "config": "20231101.ja",
+    "dataset": "wikimedia/wikipedia",
+    "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+    "utf8_bytes_scanned": 104852271
+  },
+  "split": {
+    "algorithm": "sha256(seed:article_id) modulo 10000",
+    "seed": 20260822,
+    "train_upper": 7700
+  },
+  "table_sha256": "065bb103bb1b6e48331336f335062e4cb6f73961aafdbe07675a7922bcf97e50"
+}

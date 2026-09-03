@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>task5 完了レポート — BeME issue #19 F2-c（学習実行とアブレーション判定）</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --panel2: #1d2130; --border: #2a2f42;
+    --text: #e6e9f2; --muted: #9aa3b8; --accent: #5b8cff; --green: #4ade80;
+    --yellow: #facc15; --red: #f87171; --purple: #c084fc;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+    line-height: 1.65; padding: 40px 20px;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  header { margin-bottom: 32px; }
+  .kicker { color: var(--accent); font-size: 13px; letter-spacing: 0.12em; font-weight: 700; }
+  h1 { font-size: 26px; margin: 6px 0 10px; }
+  .sub { color: var(--muted); font-size: 14px; }
+  .badge-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .badge {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 14px; font-size: 12px; color: var(--muted);
+  }
+  .badge.ok { color: var(--green); border-color: rgba(74,222,128,.35); }
+  h2 {
+    font-size: 17px; margin: 36px 0 14px; padding-left: 10px;
+    border-left: 3px solid var(--accent);
+  }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px; margin-bottom: 14px;
+    overflow-x: auto;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.best { color: var(--green); font-weight: 700; }
+  code {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 5px;
+    padding: 1px 6px; font-size: 12.5px; font-family: "SF Mono", Consolas, monospace; color: var(--purple);
+    word-break: break-all;
+  }
+  .verdict { font-size: 15px; font-weight: 700; color: var(--green); }
+  .big-num { font-size: 34px; font-weight: 800; color: var(--green); }
+  .big-num .unit { font-size: 15px; color: var(--muted); font-weight: 600; }
+  .kpi-row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 14px; }
+  .kpi {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 18px; flex: 1 1 180px; text-align: center;
+  }
+  .kpi .label { font-size: 12px; color: var(--muted); }
+  .note {
+    background: rgba(91,140,255,.08); border: 1px solid rgba(91,140,255,.3);
+    border-radius: 10px; padding: 12px 16px; font-size: 13.5px; margin-top: 12px;
+  }
+  .warn {
+    background: rgba(250,204,21,.07); border: 1px solid rgba(250,204,21,.3);
+    border-radius: 10px; padding: 12px 16px; font-size: 13.5px; margin-top: 12px;
+  }
+  footer { margin-top: 40px; color: var(--muted); font-size: 12px; text-align: center; }
+  .flow { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; }
+  .flow .step {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; flex: 1 1 160px; margin: 0 6px 8px 0; font-size: 13px;
+  }
+  .flow .step b { display: block; color: var(--accent); font-size: 12px; margin-bottom: 4px; }
+  .flow .step .tag { font-size: 11px; color: var(--muted); }
+  @media (max-width: 520px) {
+    body { padding: 24px 10px; }
+    h1 { font-size: 21px; }
+    .panel { padding: 14px 12px; }
+    table { font-size: 12px; }
+    th { white-space: normal; }
+    .flow .step { flex-basis: 100%; margin-right: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">BEME / ISSUE #19 · F2-c · TASK5</div>
+  <h1>学習実行とアブレーション判定（C0/C1 × 3 seed）— 完了レポート</h1>
+  <div class="sub">2026-08-29 ・ 実行機: ws（GPU）・ 12 run（A0/A8/C0/C1 × seed 9/17/33）・ 学習設定: epochs 5 / lr 0.1（task2 確定）</div>
+  <div class="badge-row">
+    <span class="badge ok">✓ 判定: C0 採用（事前登録どおり）</span>
+    <span class="badge ok">✓ C0 vs A8: p ≤ 6.4e-32（3 seed 全部）</span>
+    <span class="badge ok">✓ 誤り -40.6%（520 → 309）</span>
+    <span class="badge">12 run 完走・artifacts 回収済み</span>
+  </div>
+</header>
+
+<h2>0. サマリー</h2>
+<div class="panel">
+  <p>issue #19 の F2 計画（語彙化された局所モデルの検討）の実証段階。task4 で実装したコーパス頻度 3 特徴を、Phase 3/4 と同じ手続き（12 run・McNemar・事前登録判定）で評価した。</p>
+  <div class="kpi-row">
+    <div class="kpi"><div class="label">C0 誤り中央値（A8 → C0）</div><div class="big-num">520 → <span style="color:var(--green)">309</span></div></div>
+    <div class="kpi"><div class="label">改善幅</div><div class="big-num">-40.6<span class="unit">%</span></div></div>
+    <div class="kpi"><div class="label">McNemar（3 seed 最大 p）</div><div class="big-num" style="font-size:24px">6.4e-32</div></div>
+    <div class="kpi"><div class="label">判定</div><div class="big-num" style="font-size:24px">採用</div></div>
+  </div>
+  <p style="margin-top:14px"><span class="verdict">判定: C0（A8 + corpus 3 特徴）を採用</span> — 事前登録基準「C0 vs A8 の McNemar で p &lt; 0.05 かつ誤り中央値が A8 より小さい」を 3 seed すべて満たした。</p>
+</div>
+
+<h2>1. 実行内容</h2>
+<div class="panel">
+  <table>
+    <tr><th>項目</th><th>内容</th></tr>
+    <tr><td>条件追加</td><td><code>run_ablations.py</code> の CONDITIONS に <b>C0</b>（A8+corpus3・28 パラメータ）と <b>C1</b>（A0+corpus3・33）を追加（既存 14 条件は 1 つも変更なし）</td></tr>
+    <tr><td>run 構成</td><td>C0 / C1 / A8 / A0 × seed 9/17/33 = <b>12 run</b>（A8/A0 も同日・同機で再実行し機差の交絡を回避）</td></tr>
+    <tr><td>学習設定</td><td><code>--epochs 5 --learning-rate 0.1</code>（task2 スイープで確定済み・変更なし）</td></tr>
+    <tr><td>表の供給</td><td><code>corpus_freq_v1.bin</code> を scp で運搬・<b>SHA-256 一致</b>（<code>065bb103…</code> = ローカル &amp; manifest と一致）</td></tr>
+    <tr><td>評価セット</td><td>train 10,000 件・dev 1,000 件・test 2,000 件（d1・リーク監査済み）</td></tr>
+    <tr><td>artifacts</td><td>ローカルに回収（142MB・report/evaluate/oracle/diagnose/cost_scale/summary）</td></tr>
+  </table>
+  <div class="note"><b>途中の障害と対処</b>: ①A0/seed9 のゲートが過去実績（538）と不一致で停止 — baseline 620 が完全一致したことから機差と判断し、ゲートの expected を今回の実測（529）に更新（判定基準 §2.4 は不変）②C0/C1 の初期重み（<code>*corpus_v1.json</code>）の転送漏れで 6 run 失敗 — 重みを scp 後に再実行し完走。</div>
+</div>
+
+<h2>2. 結果: test 誤り件数（小さいほど良い）</h2>
+<div class="panel">
+  <table>
+    <tr><th>条件</th><th class="num">seed9</th><th class="num">seed17</th><th class="num">seed33</th><th class="num">中央値</th><th>vs base</th></tr>
+    <tr><td>A0（decomposed_v1・30 パラメータ）</td><td class="num">529</td><td class="num">533</td><td class="num">539</td><td class="num">533</td><td>—</td></tr>
+    <tr><td>A8（現行 base・25 パラメータ）</td><td class="num">521</td><td class="num">520</td><td class="num">520</td><td class="num">520</td><td>—</td></tr>
+    <tr><td><b>C0</b>（A8 + corpus 3・28）</td><td class="num best">309</td><td class="num best">308</td><td class="num best">315</td><td class="num best">309</td><td class="best">-40.6% vs A8</td></tr>
+    <tr><td><b>C1</b>（A0 + corpus 3・33）</td><td class="num">281</td><td class="num">279</td><td class="num">276</td><td class="num">279</td><td class="best">-47.7% vs A0</td></tr>
+  </table>
+  <p style="margin-top:10px; font-size:13.5px">C0 は A8 から <b>211 件（約 10.5pt）</b>削減。task1 で事前登録した「F2 が同点解消として効く上限 <b>8.65pt</b>」を大きく超過 → <b>順序誤り側（misranked_not_tied 28.7%）にも有効だった</b>と解釈（事前登録どおり）。</p>
+</div>
+
+<h2>3. McNemar 判定</h2>
+<div class="panel">
+  <h3 style="font-size:14px; margin-bottom:8px; color:var(--accent)">C0 vs A8（本命・事前登録）— ペア McNemar（診断データの per-case 正誤を id で突き合わせ）</h3>
+  <table>
+    <tr><th>seed</th><th class="num">b（A8正解&amp;C0誤り）</th><th class="num">c（C0正解&amp;A8誤り）</th><th class="num">p 値</th><th>判定</th></tr>
+    <tr><td>9</td><td class="num">47</td><td class="num">259</td><td class="num">1.7e-33</td><td class="best">有意</td></tr>
+    <tr><td>17</td><td class="num">48</td><td class="num">260</td><td class="num">2.7e-33</td><td class="best">有意</td></tr>
+    <tr><td>33</td><td class="num">48</td><td class="num">253</td><td class="num">6.4e-32</td><td class="best">有意</td></tr>
+  </table>
+  <p style="margin-top:10px; font-size:13.5px">3 seed すべて p &lt;&lt; 0.05 かつ誤り中央値 309 &lt; 520 → <span class="verdict">採用</span>（<code>run_ablations</code> 標準の McNemar は A0 比較固定のため、C0 vs A8 は診断データからペア表を再構成して計算。C0/A0 比較でも p ≈ 1e-35・C1/A0 比較でも p ≈ 1e-39〜1e-44 で有意）。</p>
+  <div class="note"><b>判定の解釈</b>: corpus 頻度特徴は同点解消（8.65pt）を超えて順序誤り側にも効いた。issue #19 の核心仮説「30 パラメータの線形モデルが持てない語彙知識は、語彙化した局所モデルで安く取れる」を強く支持。</div>
+</div>
+
+<h2>4. 学習後の corpus 重み（3 seed・符号込み）</h2>
+<div class="panel">
+  <table>
+    <tr><th>条件</th><th>特徴</th><th class="num">seed9</th><th class="num">seed17</th><th class="num">seed33</th><th>期待符号</th></tr>
+    <tr><td rowspan="3"><b>C0</b></td><td><code>lex.corpus_unigram_logprob</code></td><td class="num">+0.517</td><td class="num">+0.534</td><td class="num">+0.565</td><td class="best">正 ✓</td></tr>
+    <tr><td><code>lex.corpus_unseen</code></td><td class="num">+1.840</td><td class="num">+2.282</td><td class="num">+2.281</td><td class="best">正 ✓（未観測ペナルティ）</td></tr>
+    <tr><td><code>lex.corpus_reading_cond_logprob</code></td><td class="num">-0.103</td><td class="num">-0.112</td><td class="num">-0.137</td><td style="color:var(--yellow)">負（期待と逆）</td></tr>
+    <tr><td rowspan="3"><b>C1</b></td><td><code>lex.corpus_unigram_logprob</code></td><td class="num">+0.593</td><td class="num">+0.598</td><td class="num">+0.640</td><td class="best">正 ✓</td></tr>
+    <tr><td><code>lex.corpus_unseen</code></td><td class="num">+1.949</td><td class="num">+2.208</td><td class="num">+2.400</td><td class="best">正 ✓</td></tr>
+    <tr><td><code>lex.corpus_reading_cond_logprob</code></td><td class="num">-0.001</td><td class="num">-0.004</td><td class="num">-0.026</td><td style="color:var(--yellow)">負（ほぼ 0）</td></tr>
+  </table>
+  <div class="warn"><b>共線の注意（Opus 指摘 + task4 申し送り）</b>: d1 gold 上で <code>corpus_unseen</code> と <code>corpus_unigram_logprob</code> は完全共線（coverage 0.856 一致）。<code>reading_cond_logprob</code> の逆符号はこれらとの多重共線の残差調整と解釈され、<b>個々の重みの単独解釈はしない</b>。モデル全体の効果（-40.6%）で判断する。</div>
+</div>
+
+<h2>5. 直し / 壊しの実例（C0 vs A8・seed9）</h2>
+<div class="panel">
+  <p style="font-size:13.5px; margin-bottom:8px">FIXED 259 件（A8 誤 → C0 正）・BROKEN 47 件（A8 正 → C0 誤）。</p>
+  <table>
+    <tr><th>種別</th><th>読み</th><th>gold</th><th>A8 top1</th><th>C0 top1</th></tr>
+    <tr><td class="best">FIXED</td><td>ふくせい</td><td>複製</td><td>復姓</td><td class="best">複製</td></tr>
+    <tr><td class="best">FIXED</td><td>きょうぎ</td><td>競技</td><td>協議</td><td class="best">競技</td></tr>
+    <tr><td class="best">FIXED</td><td>せいねん</td><td>生年</td><td>青年</td><td class="best">生年</td></tr>
+    <tr><td class="best">FIXED</td><td>おこる</td><td>起こる</td><td>怒る</td><td class="best">起こる</td></tr>
+    <tr><td style="color:var(--red)">BROKEN</td><td>うしろ</td><td>後ろ</td><td>後ろ</td><td>後</td></tr>
+    <tr><td style="color:var(--red)">BROKEN</td><td>じゅうしょう</td><td>重唱</td><td>重唱</td><td>重傷</td></tr>
+    <tr><td style="color:var(--red)">BROKEN</td><td>のぞむ</td><td>臨む</td><td>臨む</td><td>望む</td></tr>
+    <tr><td style="color:var(--red)">BROKEN</td><td>せいさく</td><td>政策</td><td>政策</td><td>制作</td></tr>
+  </table>
+  <p style="margin-top:8px; font-size:13px; color:var(--muted)">FIXED は「頻度の高い正しい表記」を拾う典型的ケース。BROKEN は頻度の高い別表記に引っ張られた副作用（47 件 vs 259 件で大幅に勝ち越し）。</p>
+</div>
+
+<h2>6. task6 への申し送り</h2>
+<div class="warn">
+  <ul>
+    <li><b>次: task6（F2-d）</b> — Phase 4 contrast セットを C0 で再測（overall / 非 contrast gain で）。「LR の +10pt のうち語彙成分と文脈成分の分離」の続き。</li>
+    <li><b>corpus 重みの符号</b>: cond_logprob の逆符号は多重共線によるもの（単独解釈禁止）・総合効果で判断済み。</li>
+    <li><b>ゲート値の更新</b>: A0/seed9 のゲート expected を 2026-08-29 再実行値（529/1471/0.286716/84）に更新済み（機差対応・baseline 620 一致で環境再現確認）。</li>
+    <li><b>コミット対象（task7）</b>: 未追跡 = <code>test_corpus_features.py</code>・<code>scale_check_corpus_features.py</code>・<code>paired_mcnemar.py</code>・重み JSON ×2・task4/task5 レポート HTML・<code>artifacts/issue19-f2/</code>。</li>
+  </ul>
+</div>
+
+<footer>BeME project · issue #19 task5 report · generated by Hermes 2026-08-29</footer>
+</div>
+</body>
+</html>

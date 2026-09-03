@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>task6 完了レポート — BeME issue #19 F2-d（Phase 4 contrast 再測・語彙/文脈成分の分離）</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --panel2: #1d2130; --border: #2a2f42;
+    --text: #e6e9f2; --muted: #9aa3b8; --accent: #5b8cff; --green: #4ade80;
+    --yellow: #facc15; --red: #f87171; --purple: #c084fc;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+    line-height: 1.65; padding: 40px 20px;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  header { margin-bottom: 32px; }
+  .kicker { color: var(--accent); font-size: 13px; letter-spacing: 0.12em; font-weight: 700; }
+  h1 { font-size: 26px; margin: 6px 0 10px; }
+  .sub { color: var(--muted); font-size: 14px; }
+  .badge-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .badge {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 14px; font-size: 12px; color: var(--muted);
+  }
+  .badge.ok { color: var(--green); border-color: rgba(74,222,128,.35); }
+  h2 {
+    font-size: 17px; margin: 36px 0 14px; padding-left: 10px;
+    border-left: 3px solid var(--accent);
+  }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px; margin-bottom: 14px;
+    overflow-x: auto;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  td.best { color: var(--green); font-weight: 700; }
+  code {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 5px;
+    padding: 1px 6px; font-size: 12.5px; font-family: "SF Mono", Consolas, monospace; color: var(--purple);
+    word-break: break-all;
+  }
+  .verdict { font-size: 15px; font-weight: 700; color: var(--green); }
+  .big-num { font-size: 30px; font-weight: 800; color: var(--green); }
+  .big-num .unit { font-size: 14px; color: var(--muted); font-weight: 600; }
+  .kpi-row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 14px; }
+  .kpi {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 18px; flex: 1 1 170px; text-align: center;
+  }
+  .kpi .label { font-size: 12px; color: var(--muted); }
+  .note {
+    background: rgba(91,140,255,.08); border: 1px solid rgba(91,140,255,.3);
+    border-radius: 10px; padding: 12px 16px; font-size: 13.5px; margin-top: 12px;
+  }
+  .warn {
+    background: rgba(250,204,21,.07); border: 1px solid rgba(250,204,21,.3);
+    border-radius: 10px; padding: 12px 16px; font-size: 13.5px; margin-top: 12px;
+  }
+  footer { margin-top: 40px; color: var(--muted); font-size: 12px; text-align: center; }
+  .formula {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 18px; font-family: "SF Mono", Consolas, monospace; font-size: 13px;
+    line-height: 1.9; margin: 10px 0; white-space: pre; overflow-x: auto;
+  }
+  @media (max-width: 520px) {
+    body { padding: 24px 10px; }
+    h1 { font-size: 21px; }
+    .panel { padding: 14px 12px; }
+    table { font-size: 12px; }
+    th { white-space: normal; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">BEME / ISSUE #19 · F2-d · TASK6</div>
+  <h1>Phase 4 contrast 再測 — 語彙成分と文脈成分の分離</h1>
+  <div class="sub">2026-08-30 ・ 実行機: ws・ rerank_eval（mock reranker・コード変更ゼロ）・ A8 / C0 × seed 9/17/33 + Phase 4 L/LR 参照値</div>
+  <div class="badge-row">
+    <span class="badge ok">✓ 予測 2 件とも的中（both_correct=0/64・non_contrast 上昇）</span>
+    <span class="badge ok">✓ 語彙成分が overall gain のほぼ全部を説明</span>
+    <span class="badge">artifacts 回収・SHA-256 記録済み</span>
+  </div>
+</header>
+
+<h2>0. サマリー</h2>
+<div class="panel">
+  <p>Phase 4 で CE リランカ（LR）が買った <b>+10pt</b> が「本物の文脈解消」なのか「大きいモデルが単語を知っているだけ」なのかを分離した。文脈を見ない C0（語彙化局所モデル）を A8 と同日・同機で測り、overall gain を語彙成分の下限見積りとした。</p>
+  <div class="kpi-row">
+    <div class="kpi"><div class="label">C0 overall gain（A8 比）</div><div class="big-num">+10.55<span class="unit">pt</span></div></div>
+    <div class="kpi"><div class="label">LR overall gain（Phase 4 参照）</div><div class="big-num">+10.05<span class="unit">pt</span></div></div>
+    <div class="kpi"><div class="label">C0 both_correct</div><div class="big-num" style="font-size:24px">0/64</div></div>
+    <div class="kpi"><div class="label">残差（文脈+交絡の上限）</div><div class="big-num" style="font-size:24px; color:var(--yellow)">-0.50 pt</div></div>
+  </div>
+  <p style="margin-top:14px"><span class="verdict">結論: Phase 4 の +10pt はほぼ全て語彙成分（単語知識）で説明できる。</span> 文脈の優位は contrast ペア（真に曖昧な 128 件）に限定される。</p>
+</div>
+
+<h2>1. 目的と論理（issue #19 提案アクション 3）</h2>
+<div class="panel">
+  <ul>
+    <li>Phase 4 の LR は <code>both_correct</code> = 21/64。文脈盲モデルは原理的に 0 しか取れない → <b>本物の文脈解消は存在する</b></li>
+    <li>しかし overall +10pt のうち「単語を知っているだけ」の分は未分離だった</li>
+    <li><b>C0 は文脈を見ない</b> → <code>both_correct</code> は 0 のままのはず。その状態で overall がどれだけ上がるか = 語彙成分の見積り</li>
+  </ul>
+  <div class="note"><b>事前登録の予測</b>: ①C0 の both_correct ≈ 0（0 でなければ測定/実装が壊れている）②C0 の non_contrast_top1 は A8 より上がる。主判定は <code>non_contrast_top1</code> の gain（issue コメント §5 の指示）。</div>
+</div>
+
+<h2>2. 結果（4 指標・3 seed）</h2>
+<div class="panel">
+  <table>
+    <tr><th>条件</th><th class="num">seed</th><th class="num">overall Top-1</th><th class="num">誤り</th><th class="num">non_contrast</th><th class="num">contrast</th><th class="num">both_correct</th></tr>
+    <tr><td rowspan="3">A8</td><td class="num">9</td><td class="num">.7395</td><td class="num">521</td><td class="num">.7687</td><td class="num">.3125</td><td class="num">0/64</td></tr>
+    <tr><td class="num">17</td><td class="num">.7400</td><td class="num">520</td><td class="num">.7692</td><td class="num">.3125</td><td class="num">0/64</td></tr>
+    <tr><td class="num">33</td><td class="num">.7400</td><td class="num">520</td><td class="num">.7692</td><td class="num">.3125</td><td class="num">0/64</td></tr>
+    <tr><td rowspan="3"><b>C0</b></td><td class="num">9</td><td class="num best">.8455</td><td class="num best">309</td><td class="num best">.8755</td><td class="num best">.4063</td><td class="num">0/64</td></tr>
+    <tr><td class="num">17</td><td class="num best">.8460</td><td class="num best">308</td><td class="num best">.8761</td><td class="num best">.4063</td><td class="num">0/64</td></tr>
+    <tr><td class="num">33</td><td class="num best">.8425</td><td class="num best">315</td><td class="num best">.8734</td><td class="num best">.3906</td><td class="num">0/64</td></tr>
+  </table>
+  <p style="margin-top:10px; font-size:13.5px">
+    <b>予測 ①</b>: both_correct は <b>0/64（全 seed）</b> = 文脈盲の確認 ✅（0 でないケースは無く、測定・実装は健全）<br>
+    <b>予測 ②</b>: non_contrast_top1 は <b>.7692 → .8755（+10.6pt）</b> ✅ — 誤り件数は task5 の report.json と完全一致（520/520/520・309/308/315）
+  </p>
+</div>
+
+<h2>3. 分離の見積り（§2.4 の形式）</h2>
+<div class="panel">
+  <div class="formula">LR の overall gain (Phase 4)          : +10.05 pt  （.7310 → .8315・参照値・機と日付が異なる）
+C0 の overall gain (対 A8・同日同機)   : +10.55 pt  （.7400 → .8455・中央値）← 語彙成分の下限見積り
+残差 (X − Y)                          : -0.50 pt   ← 文脈成分 + 交絡の上限見積り（負 = 語彙で説明しきった）
+C0 の both_correct                    : 0/64       ← 予測どおり 0（文脈盲の確認）</div>
+  <div class="warn"><b>注記（ミッション制約）</b>: この引き算は<b>上限/下限の粗い見積りであって厳密な分解ではない</b>。L（Phase 4）と C0（task5）は base（A0 vs A8）も学習日も異なる。単一 split の差に p 値は付けない。</div>
+</div>
+
+<h2>4. 解釈</h2>
+<div class="panel">
+  <ul>
+    <li><b>語彙成分が支配的</b>: C0（語彙化・文脈なし）単体で、LR（語彙 + CE 文脈）と<b>同等以上の overall gain</b>（+10.55 vs +10.05・直接比較は不可だが同水準）。Phase 4 の +10pt のほぼ全てが「単語を知っている」ことで説明できる。</li>
+    <li><b>文脈の優位は contrast に限定</b>: contrast Top-1 は C0 .4063 vs LR .5313（差 .125 ≈ 文脈の純粋寄与の目安）。真に曖昧な 128 件では CE がまだ勝つ。逆に言えば、<b>overall への文脈の寄与は小さい</b>。</li>
+    <li><b>issue #19 の仮説がほぼ全域で成立</b>: 「30 パラメータのモデルが持てない語彙知識を CE が肩代わりしているだけの部分があるなら、その部分は語彙化した局所モデルで CE よりずっと安く取れる」→ overall の観点では肩代わり部分が（ほぼ）全体だった。</li>
+    <li><b>次の自然な問い</b>: C0 を局所とした LR 版（語彙 + 文脈の併用）は、L ベースの LR よりさらに良くなるか？ contrast の両側を語彙で片付けられる分、CE は真に曖昧なケースに集中できる可能性がある。</li>
+  </ul>
+</div>
+
+<h2>5. 完了条件の確認</h2>
+<div class="panel">
+  <table>
+    <tr><th>項目</th><th>状態</th></tr>
+    <tr><td>A8 / C0 の 4 指標が 3 seed 分測定</td><td>✅（6 run・rerank_eval mock）</td></tr>
+    <tr><td>both_correct ≈ 0 の確認</td><td>✅ 0/64 全 seed（予測どおり・測定健全）</td></tr>
+    <tr><td>分離の見積り（注記つき）</td><td>✅ §3 のとおり</td></tr>
+    <tr><td>Phase 4 参照値との比較・機/日付の違い明記</td><td>✅（L/LR は再実行せず phase4-report から引用）</td></tr>
+    <tr><td>artifacts 回収・SHA-256 記録</td><td>✅（36MB・6 ファイルの SHA-256 記録済み）</td></tr>
+    <tr><td>コード変更ゼロ（src/beme diff 空）</td><td>✅（src の diff は task4 由来のみ・task6 では無変更）</td></tr>
+    <tr><td>commit / push なし</td><td>✅</td></tr>
+  </table>
+</div>
+
+<h2>6. task7（レポート・PR）への申し送り</h2>
+<div class="warn">
+  <ul>
+    <li><b>分離の結果を issue #19 の「提案アクション 3」への回答として明記</b>: 語彙成分が +10.55pt（下限）・文脈+交絡が -0.50pt（上限）・both_correct 0/64。</li>
+    <li>レポートの「L と C0 は base も学習日も違う」注記を必ず含める。</li>
+    <li>コミット対象: task4/5/6 の全成果物（test_corpus_features.py・scale_check・contrast_metrics.py・paired_mcnemar.py・重み JSON ×2・レポート HTML ×3・artifacts 2 式）。</li>
+    <li>次候補: <b>C0 ベースの LR 実験</b>（語彙 + 文脈の併用）— task6 の自然な延長。</li>
+  </ul>
+</div>
+
+<footer>BeME project · issue #19 task6 report · generated by Hermes 2026-08-30</footer>
+</div>
+</body>
+</html>

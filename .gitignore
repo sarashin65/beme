@@ -6,5 +6,6 @@ data/corpus.txt
 data/dictionary_learned.tsv
 data/dictionary_learned_v2.tsv
 data/d1/*.jsonl
+data/corpus_freq_v1.bin
 
 artifacts/

@@ -23,9 +23,11 @@ def module():
 
 def test_condition_table_and_mcnemar_methods() -> None:
     value = module()
-    assert len(value.CONDITIONS) == 14
+    assert len(value.CONDITIONS) == 16
     assert value.CONDITIONS["A7"] == "decomposed_v1-no_script"
     assert value.CONDITIONS["A8"] == "decomposed_v1-no_script-surface_len"
+    assert value.CONDITIONS["C0"] == "decomposed_v1-no_script-surface_len+corpus_v1"
+    assert value.CONDITIONS["C1"] == "decomposed_v1+corpus_v1"
     assert value.mcnemar(2, 1)["method"] == "exact_binomial_two_sided"
     assert value.mcnemar(20, 10)["method"] == "continuity_corrected_chi_squared"
 
