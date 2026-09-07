@@ -305,6 +305,7 @@ def evaluate_test(
     examples: Sequence[TrainingExample],
     lattice_builder: LatticeBuilder,
     scorer: LinearScorer,
+    *,
     sparse_weights: SparseLexicalWeights | None = None,
 ) -> SplitEvaluation:
     """Evaluate held-out test data after dev model selection is complete."""

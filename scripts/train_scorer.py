@@ -154,6 +154,12 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         SparseLexicalWeights.load(args.sparse_weights)
         if args.sparse_weights is not None else None
     )
+    if "sparse" in initial_weights.feature_spec and args.sparse_weights is None:
+        raise ValueError("--sparse-weights is required for sparse feature specifications")
+    if sparse_weights is not None and "lex.sparse_lexical" not in initial_weights:
+        raise ValueError(
+            "initial weights must include 'lex.sparse_lexical' when --sparse-weights is set"
+        )
     extractor = extractor_for(
         initial_weights.feature_spec, dictionary.reading_conditional,
         sparse_weights=sparse_weights,
@@ -188,7 +194,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     )
     selected_test = evaluate_test(
         result, splits["test"], lattice_builder, training_scorer,
-        result.selected_sparse_weights,
+        sparse_weights=result.selected_sparse_weights,
     )
     report = {
         "cli": {

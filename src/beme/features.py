@@ -110,6 +110,12 @@ class FeatureExtractor:
         self._needs_corpus = bool(set(spec.lexical_features) & set(CORPUS_LEXICAL_FEATURES))
 
     def set_sparse_weights(self, sparse_weights: "SparseLexicalWeights | None") -> None:
+        """Set or clear the sparse lexical weights for this extractor.
+
+        This also invalidates the scorer's edge cache since sparse weights
+        affect lexical feature values. Callers should call scorer.invalidate()
+        after this method.
+        """
         self.sparse_weights = sparse_weights
 
     def lexical_features(self, edge: LatticeEdge) -> dict[str, float]:

@@ -21,7 +21,12 @@ class SparseLexicalWeights:
         3. w_r     (reading only)            — most general
         4. 0.0                               — default
 
-    During training all three levels are updated independently.
+    During training, only pair and surface levels are updated (see
+    training._update_sparse_weights). The reading level is kept for
+    backoff reference only and is not updated during learning, to
+    avoid cancellation between different surfaces of the same reading
+    (homophone ambiguity). This means the effective backoff depth is
+    2 levels during training and 3 levels at inference time.
     """
 
     pair_weights: dict[str, float]
