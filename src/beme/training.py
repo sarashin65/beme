@@ -146,14 +146,22 @@ def _update_sparse_weights(
     prediction: LatticePath,
     learning_rate: float,
 ) -> None:
-    """Apply the token-count perceptron delta at all sparse backoff levels."""
+    """Apply the token-count perceptron delta at the pair level only.
+
+    edge_cost is a cost (Viterbi minimizes), so the correct direction is:
+      gold: -lr (make the correct path cheaper)
+      pred: +lr (make the wrong path more expensive)
+
+    Surface and reading levels are omitted: the surface level was
+    empirically redundant with the pair level (Σ_r pair[r,s] within
+    noise) and slightly hurt accuracy, and the reading level cancels
+    across homophone surfaces (see issue #21 experiment analysis).
+    """
 
     for token in gold.tokens:
-        sparse_weights.update_pair(token.reading, token.surface, learning_rate)
-        sparse_weights.update_surface(token.surface, learning_rate)
-    for token in prediction.tokens:
         sparse_weights.update_pair(token.reading, token.surface, -learning_rate)
-        sparse_weights.update_surface(token.surface, -learning_rate)
+    for token in prediction.tokens:
+        sparse_weights.update_pair(token.reading, token.surface, +learning_rate)
 
 
 def train_scorer(

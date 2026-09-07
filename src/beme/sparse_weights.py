@@ -189,7 +189,12 @@ class SparseLexicalWeights:
 
         Accepts either the manifest path (``.sparse.json``) or a base path.
         """
-        manifest_path = path if path.suffix == ".sparse.json" else path.with_suffix(".sparse.json")
+        # Path.suffix on "foo.sparse.json" is ".json" (only the final dot),
+        # so check the full name instead (issue #21 experiment analysis, L1).
+        if path.name.endswith(".sparse.json"):
+            manifest_path = path
+        else:
+            manifest_path = path.with_suffix(".sparse.json")
         sidecar_path = manifest_path.with_suffix(".bin")
 
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
