@@ -109,6 +109,9 @@ class FeatureExtractor:
         # style), never loaded for the other specifications.
         self._needs_corpus = bool(set(spec.lexical_features) & set(CORPUS_LEXICAL_FEATURES))
 
+    def set_sparse_weights(self, sparse_weights: "SparseLexicalWeights | None") -> None:
+        self.sparse_weights = sparse_weights
+
     def lexical_features(self, edge: LatticeEdge) -> dict[str, float]:
         if self.spec.family == "decomposed_v1":
             token = edge.token

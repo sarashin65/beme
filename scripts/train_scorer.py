@@ -187,7 +187,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         metadata=metadata,
     )
     selected_test = evaluate_test(
-        result, splits["test"], lattice_builder, training_scorer
+        result, splits["test"], lattice_builder, training_scorer,
+        result.selected_sparse_weights,
     )
     report = {
         "cli": {
@@ -228,8 +229,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         },
     }
     _atomic_weights(args.output_weights, result.averaged_weights)
-    if sparse_weights is not None:
-        sparse_weights.dump(args.output_weights)
+    if result.selected_sparse_weights is not None:
+        result.selected_sparse_weights.dump(args.output_weights)
     _atomic_json(args.output_report, report)
     return report
 

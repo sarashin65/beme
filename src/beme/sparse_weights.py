@@ -32,6 +32,13 @@ class SparseLexicalWeights:
     def empty(cls) -> SparseLexicalWeights:
         return cls({}, {}, {})
 
+    def copy(self) -> SparseLexicalWeights:
+        return SparseLexicalWeights(
+            dict(self.pair_weights),
+            dict(self.surface_weights),
+            dict(self.reading_weights),
+        )
+
     @staticmethod
     def _pair_key(reading: str, surface: str) -> str:
         return f"{reading}\t{surface}"

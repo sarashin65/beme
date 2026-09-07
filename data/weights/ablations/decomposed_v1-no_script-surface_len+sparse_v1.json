@@ -13,6 +13,7 @@
     "lex.literal": 0.0,
     "lex.overlay_cost": 0.0,
     "lex.source.overlay": 0.0,
+    "lex.sparse_lexical": 1.0,
     "lex.unknown": 8.0,
     "trans.bos": 0.0,
     "trans.default": 0.12,

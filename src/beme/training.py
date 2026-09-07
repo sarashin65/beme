@@ -65,6 +65,7 @@ class EpochResult:
     train: SplitEvaluation
     dev: SplitEvaluation
     averaged_weights: Weights
+    sparse_weights: SparseLexicalWeights | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +76,7 @@ class TrainingResult:
     selected_epoch: int
     current_weights: Weights
     averaged_weights: Weights
+    selected_sparse_weights: SparseLexicalWeights | None = None
 
 
 def _prediction(
@@ -120,6 +122,8 @@ def _updated_weights(scorer: LinearScorer, delta: Mapping[str, float], rate: flo
     # negation, w_cost += eta * (Phi_pred - Phi_gold).
     values = dict(scorer.weights.values)
     for name, value in delta.items():
+        if name == "lex.sparse_lexical":
+            continue  # sparse lexical weight is fixed at 1.0
         values[name] = values.get(name, scorer.weights.default_weight) - rate * value
     return Weights(values, scorer.weights.default_weight, scorer.weights.feature_spec)
 
@@ -147,11 +151,9 @@ def _update_sparse_weights(
     for token in gold.tokens:
         sparse_weights.update_pair(token.reading, token.surface, learning_rate)
         sparse_weights.update_surface(token.surface, learning_rate)
-        sparse_weights.update_reading(token.reading, learning_rate)
     for token in prediction.tokens:
         sparse_weights.update_pair(token.reading, token.surface, -learning_rate)
         sparse_weights.update_surface(token.surface, -learning_rate)
-        sparse_weights.update_reading(token.reading, -learning_rate)
 
 
 def train_scorer(
@@ -184,7 +186,7 @@ def train_scorer(
     if extractor is None:
         extractor = scorer.extractor
     if sparse_weights is not None:
-        extractor.sparse_weights = sparse_weights
+        extractor.set_sparse_weights(sparse_weights)
     initial = scorer.weights
     base_metadata = dict(metadata or {})
     totals: dict[str, float] = {}
@@ -259,7 +261,10 @@ def train_scorer(
             dev_evaluation = evaluate_split(dev_examples, lattice_builder, scorer)
         finally:
             scorer.invalidate(current)
-        epoch_results.append(EpochResult(epoch, train_evaluation, dev_evaluation, averaged))
+        epoch_results.append(EpochResult(
+            epoch, train_evaluation, dev_evaluation, averaged,
+            sparse_weights.copy() if sparse_weights is not None else None,
+        ))
 
     selected = min(
         epoch_results,
@@ -289,7 +294,10 @@ def train_scorer(
         selected.averaged_weights.feature_spec,
         final_metadata,
     )
-    return TrainingResult(tuple(epoch_results), selected.epoch, scorer.weights, final_averaged)
+    return TrainingResult(
+        tuple(epoch_results), selected.epoch, scorer.weights, final_averaged,
+        selected.sparse_weights.copy() if selected.sparse_weights is not None else None,
+    )
 
 
 def evaluate_test(
@@ -297,14 +305,19 @@ def evaluate_test(
     examples: Sequence[TrainingExample],
     lattice_builder: LatticeBuilder,
     scorer: LinearScorer,
+    sparse_weights: SparseLexicalWeights | None = None,
 ) -> SplitEvaluation:
     """Evaluate held-out test data after dev model selection is complete."""
 
     current = scorer.weights
+    current_sparse_weights = scorer.extractor.sparse_weights
     scorer.invalidate(result.averaged_weights)
+    if sparse_weights is not None:
+        scorer.extractor.set_sparse_weights(sparse_weights)
     try:
         return evaluate_split(examples, lattice_builder, scorer)
     finally:
+        scorer.extractor.set_sparse_weights(current_sparse_weights)
         scorer.invalidate(current)
 
 
