@@ -15,6 +15,7 @@ from .lattice import LatticeEdge
 if TYPE_CHECKING:
     from .corpus_freq import CorpusFrequencyTable
     from .lattice import LatticePath
+    from .sparse_weights import SparseLexicalWeights
     from .weights import Weights
 
 
@@ -95,12 +96,14 @@ class FeatureExtractor:
         reading_conditional: Mapping[str, tuple[float, int]] | None = None,
         *,
         corpus_frequency: "CorpusFrequencyTable | None" = None,
+        sparse_weights: "SparseLexicalWeights | None" = None,
     ) -> None:
         if not isinstance(spec, FeatureSpec):
             raise TypeError("spec must be a FeatureSpec")
         self.spec = spec
         self.reading_conditional = reading_conditional
         self.corpus_frequency = corpus_frequency
+        self.sparse_weights = sparse_weights
         # Whether the active spec declares corpus features.  The 340k-pair
         # table itself is resolved lazily inside lexical_features (matrix
         # style), never loaded for the other specifications.
@@ -116,6 +119,10 @@ class FeatureExtractor:
                 "lex.surface_len": float(len(token.surface)),
                 "lex.proper_noun": float(token.pos == "proper_noun"),
             }
+            if self.sparse_weights is not None:
+                features["lex.sparse_lexical"] = self.sparse_weights.get(
+                    token.reading, token.surface
+                )
             normalized_surface = unicodedata.normalize("NFKC", token.surface)
             if normalized_surface and all("\u4e00" <= char <= "\u9fff" for char in normalized_surface):
                 script = "kanji"
@@ -205,6 +212,10 @@ class FeatureExtractor:
         if self.spec.family != "legacy_v1":
             raise ValueError(f"unsupported feature specification: {self.spec.id!r}")
         features = {"lex.base_cost": edge.token.cost}
+        if self.sparse_weights is not None:
+            features["lex.sparse_lexical"] = self.sparse_weights.get(
+                edge.token.reading, edge.token.surface
+            )
         return {name: value for name, value in features.items()
                 if name in self.spec.lexical_features}
 
@@ -366,6 +377,18 @@ CORPUS_V1_A8_SPEC = FeatureSpec(
     _A8_BASE.transition_features,
     DECOMPOSED_V1_SPEC.family,
 )
+SPARSE_V1_A8_SPEC = FeatureSpec(
+    "decomposed_v1-no_script-surface_len+sparse_v1",
+    (*_A8_BASE.lexical_features, "lex.sparse_lexical"),
+    _A8_BASE.transition_features,
+    DECOMPOSED_V1_SPEC.family,
+)
+SPARSE_V1_C0_SPEC = FeatureSpec(
+    "decomposed_v1-no_script-surface_len+corpus_v1+sparse_v1",
+    (*CORPUS_V1_A8_SPEC.lexical_features, "lex.sparse_lexical"),
+    CORPUS_V1_A8_SPEC.transition_features,
+    DECOMPOSED_V1_SPEC.family,
+)
 _SPEC_REGISTRY = {
     "legacy_v1": LEGACY_V1_SPEC,
     "decomposed_v1": DECOMPOSED_V1_SPEC,
@@ -380,6 +403,8 @@ _SPEC_REGISTRY = {
     MATRIX_FREQ_V1_SPEC.id: MATRIX_FREQ_V1_SPEC,
     CORPUS_V1_A8_SPEC.id: CORPUS_V1_A8_SPEC,
     CORPUS_V1_A0_SPEC.id: CORPUS_V1_A0_SPEC,
+    SPARSE_V1_A8_SPEC.id: SPARSE_V1_A8_SPEC,
+    SPARSE_V1_C0_SPEC.id: SPARSE_V1_C0_SPEC,
 }
 
 
@@ -395,9 +420,11 @@ def extractor_for(
     reading_conditional: Mapping[str, tuple[float, int]] | None = None,
     *,
     corpus_frequency: "CorpusFrequencyTable | None" = None,
+    sparse_weights: "SparseLexicalWeights | None" = None,
 ) -> FeatureExtractor:
     return FeatureExtractor(
-        resolve_spec(spec_id), reading_conditional, corpus_frequency=corpus_frequency
+        resolve_spec(spec_id), reading_conditional,
+        corpus_frequency=corpus_frequency, sparse_weights=sparse_weights,
     )
 
 
@@ -525,6 +552,10 @@ __all__ = [
     "FREQ_V1_SPEC",
     "FREQ_V1_NO_IPADIC_SPEC",
     "MATRIX_FREQ_V1_SPEC",
+    "CORPUS_V1_A8_SPEC",
+    "CORPUS_V1_A0_SPEC",
+    "SPARSE_V1_A8_SPEC",
+    "SPARSE_V1_C0_SPEC",
     "TransitionState",
     "decomposed_v1_extractor",
     "extractor_for",

@@ -10,11 +10,13 @@ import pytest
 from beme.dictionary import Dictionary
 from beme.features import (
     FeatureExtractor,
+    FeatureSpec,
     decomposed_v1_extractor,
     feature_delta,
     legacy_v1_extractor,
     path_features,
 )
+from beme.sparse_weights import SparseLexicalWeights
 from beme.lattice import LatticeEdge, Token, build_lattice, k_best_viterbi
 from beme.scorer import LinearScorer
 from beme.weights import DEFAULT_WEIGHTS_PATH, Weights
@@ -62,6 +64,15 @@ def test_decomposed_features_include_declared_lexical_signals() -> None:
     assert ipadic_features["lex.reading_len"] == 3.0
     assert ipadic_features["lex.surface_len"] == 2.0
     assert ipadic_features["lex.script.kanji"] == 1.0
+
+
+def test_sparse_lexical_feature_uses_reading_surface_backoff() -> None:
+    spec = FeatureSpec("test_sparse", ("lex.sparse_lexical",), family="legacy_v1")
+    sparse = SparseLexicalWeights.empty()
+    sparse.set_surface("汽車", 2.5)
+    extractor = FeatureExtractor(spec, sparse_weights=sparse)
+    edge = LatticeEdge(0, 3, Token("きしゃ", "汽車", "noun", 1.0))
+    assert extractor.lexical_features(edge) == {"lex.sparse_lexical": 2.5}
 
 
 def test_decomposed_ipadic_cost_mapped_honors_non_default_build_params() -> None:

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from beme.features import FeatureExtractor, LEGACY_V1_SPEC
+from beme.features import FeatureExtractor, FeatureSpec, LEGACY_V1_SPEC
 from beme.lattice import Lattice, LatticeEdge, LatticeNode, Token
 from beme.scorer import LinearScorer
+from beme.sparse_weights import SparseLexicalWeights
 from beme.training import evaluate_split, evaluate_test, train_scorer
 from beme.training_data import TrainingExample
 from beme.weights import Weights
@@ -49,6 +50,24 @@ def test_one_cost_update_moves_gold_below_prediction() -> None:
     assert result.averaged_weights["lex.base_cost"] == -1.0
     assert result.epochs[0].train.model_errors == 1
     assert evaluate_split([example("B")], builder, model).exact_matches == 1
+
+
+def test_sparse_weights_update_for_gold_and_prediction_tokens() -> None:
+    sparse = SparseLexicalWeights.empty()
+    spec = FeatureSpec("test_sparse", ("lex.base_cost", "lex.sparse_lexical"), family="legacy_v1")
+    model = LinearScorer(
+        FeatureExtractor(spec, sparse_weights=sparse),
+        Weights({"lex.base_cost": 1.0, "lex.sparse_lexical": 1.0}, feature_spec="test_sparse"),
+    )
+    train_scorer(
+        [example("B")], [], builder, model, epochs=1, learning_rate=1.0,
+        sparse_weights=sparse,
+    )
+    assert sparse.get_pair("a", "B") == 1.0
+    assert sparse.get_pair("a", "A") == -1.0
+    assert sparse.get_surface("B") == 1.0
+    assert sparse.get_surface("A") == -1.0
+    assert sparse.get_reading("a") == 0.0
 
 
 def test_correct_examples_are_steps_but_coverage_errors_are_not() -> None:

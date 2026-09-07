@@ -46,6 +46,8 @@ def test_registry_contains_the_two_bases_and_eight_ablations() -> None:
         "decomposed_v1+matrix_v1-pos_pairs", "decomposed_v1+freq_v1",
         "decomposed_v1+freq_v1-no_ipadic_cost", "decomposed_v1+matrix_v1+freq_v1",
         "decomposed_v1-no_script-surface_len+corpus_v1", "decomposed_v1+corpus_v1",
+        "decomposed_v1-no_script-surface_len+sparse_v1",
+        "decomposed_v1-no_script-surface_len+corpus_v1+sparse_v1",
     )
 
 
@@ -59,7 +61,7 @@ def test_base_extractors_are_unchanged() -> None:
 @pytest.mark.parametrize("spec_id", registered_spec_ids()[2:])
 def test_ablation_outputs_are_declared(spec_id: str) -> None:
     edge = LatticeEdge(0, 2, Token("きしゃ", "汽車", "noun", 2.0, raw_cost=3500, source="ipadic"))
-    if spec_id.endswith("+corpus_v1"):
+    if "+corpus_v1" in spec_id:
         extractor = FeatureExtractor(
             resolve_spec(spec_id), {}, corpus_frequency=_corpus_table()
         )

@@ -28,6 +28,7 @@ from beme.lattice import build_lattice  # noqa: E402
 from beme.training import evaluate_split, evaluate_test, train_scorer  # noqa: E402
 from beme.training_data import build_manifest, load_splits  # noqa: E402
 from beme.scorer import LinearScorer  # noqa: E402
+from beme.sparse_weights import SparseLexicalWeights  # noqa: E402
 from beme.weights import DEFAULT_WEIGHTS_PATH, Weights  # noqa: E402
 
 
@@ -55,6 +56,16 @@ def _positive_float(value: str) -> float:
     return parsed
 
 
+def _nonnegative_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if not math.isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError("must be a finite number greater than or equal to zero")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train the BeME scorer deterministically")
     parser.add_argument("--train", type=Path, required=True)
@@ -64,6 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--initial-weights", type=Path, default=DEFAULT_INITIAL_WEIGHTS)
     parser.add_argument("--epochs", type=_positive_int, required=True)
     parser.add_argument("--learning-rate", type=_positive_float, required=True)
+    parser.add_argument("--sparse-weights", type=Path)
+    parser.add_argument("--l2-regularization", type=_nonnegative_float, default=0.0)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--output-weights", type=Path, required=True)
     parser.add_argument("--output-report", type=Path, required=True)
@@ -137,7 +150,14 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     manifest = _stable_manifest(raw_manifest, paths)
     dictionary = Dictionary.from_tsv(args.dictionary)
     initial_weights = Weights.load(args.initial_weights, feature_spec=None)
-    extractor = extractor_for(initial_weights.feature_spec, dictionary.reading_conditional)
+    sparse_weights = (
+        SparseLexicalWeights.load(args.sparse_weights)
+        if args.sparse_weights is not None else None
+    )
+    extractor = extractor_for(
+        initial_weights.feature_spec, dictionary.reading_conditional,
+        sparse_weights=sparse_weights,
+    )
     dictionary_sha256 = _sha256(args.dictionary)
     initial_weights_sha256 = _sha256(args.initial_weights)
     metadata = {
@@ -162,6 +182,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         learning_rate=args.learning_rate,
         seed=args.seed,
         extractor=extractor,
+        sparse_weights=sparse_weights,
+        l2_regularization=args.l2_regularization,
         metadata=metadata,
     )
     selected_test = evaluate_test(
@@ -176,6 +198,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "initial_weights": _stable_path(args.initial_weights),
             "epochs": args.epochs,
             "learning_rate": args.learning_rate,
+            "sparse_weights": _stable_path(args.sparse_weights) if args.sparse_weights else None,
+            "l2_regularization": args.l2_regularization,
             "seed": args.seed,
             "output_weights": args.output_weights.name,
             "output_report": args.output_report.name,
@@ -204,6 +228,8 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         },
     }
     _atomic_weights(args.output_weights, result.averaged_weights)
+    if sparse_weights is not None:
+        sparse_weights.dump(args.output_weights)
     _atomic_json(args.output_report, report)
     return report
 

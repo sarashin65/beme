@@ -11,6 +11,7 @@ from .features import FeatureExtractor, feature_delta, path_features
 from .lattice import Lattice, LatticePath, _top1_path, top1_surface
 from .oracle import constrained_best_path
 from .scorer import LinearScorer
+from .sparse_weights import SparseLexicalWeights
 from .training_data import TrainingExample
 from .weights import Weights
 
@@ -135,6 +136,24 @@ def _averaged_weights(
     return Weights(values, initial.default_weight, initial.feature_spec, metadata)
 
 
+def _update_sparse_weights(
+    sparse_weights: SparseLexicalWeights,
+    gold: LatticePath,
+    prediction: LatticePath,
+    learning_rate: float,
+) -> None:
+    """Apply the token-count perceptron delta at all sparse backoff levels."""
+
+    for token in gold.tokens:
+        sparse_weights.update_pair(token.reading, token.surface, learning_rate)
+        sparse_weights.update_surface(token.surface, learning_rate)
+        sparse_weights.update_reading(token.reading, learning_rate)
+    for token in prediction.tokens:
+        sparse_weights.update_pair(token.reading, token.surface, -learning_rate)
+        sparse_weights.update_surface(token.surface, -learning_rate)
+        sparse_weights.update_reading(token.reading, -learning_rate)
+
+
 def train_scorer(
     train_examples: Sequence[TrainingExample],
     dev_examples: Sequence[TrainingExample],
@@ -145,6 +164,8 @@ def train_scorer(
     learning_rate: float,
     seed: int = 0,
     extractor: FeatureExtractor | None = None,
+    sparse_weights: SparseLexicalWeights | None = None,
+    l2_regularization: float = 0.0,
     metadata: Mapping[str, Any] | None = None,
 ) -> TrainingResult:
     """Train with cost-minimizing averaged structured perceptron updates.
@@ -158,8 +179,12 @@ def train_scorer(
         raise ValueError("epochs must be a positive integer")
     if learning_rate < 0:
         raise ValueError("learning_rate must be non-negative")
+    if l2_regularization < 0:
+        raise ValueError("l2_regularization must be non-negative")
     if extractor is None:
         extractor = scorer.extractor
+    if sparse_weights is not None:
+        extractor.sparse_weights = sparse_weights
     initial = scorer.weights
     base_metadata = dict(metadata or {})
     totals: dict[str, float] = {}
@@ -193,6 +218,10 @@ def train_scorer(
                     delta = feature_delta(gold_features, prediction_features)
                     new_weights = _updated_weights(scorer, delta, learning_rate)
                     scorer.invalidate(new_weights)
+                    if sparse_weights is not None:
+                        _update_sparse_weights(sparse_weights, gold, prediction, learning_rate)
+                        # Sparse values are part of the extractor, not Weights.
+                        scorer.invalidate()
                     updates += 1
             for name in set(scorer.weights.values) | set(totals):
                 if name not in totals:
@@ -201,6 +230,10 @@ def train_scorer(
                     # them instead of averaging them in as zero.
                     totals[name] = (averaging_steps - 1) * initial.default_weight
                 totals[name] += scorer.weights[name]
+
+        if sparse_weights is not None and l2_regularization > 0:
+            sparse_weights.apply_l2(l2_regularization)
+            scorer.invalidate()
 
         train_evaluation = SplitEvaluation.from_counts(
             examples=len(train_examples),
@@ -217,6 +250,7 @@ def train_scorer(
             "epochs": epoch,
             "learning_rate": learning_rate,
             "seed": seed,
+            "l2_regularization": l2_regularization,
         }
         averaged = _averaged_weights(initial, totals, averaging_steps, snapshot_metadata)
         current = scorer.weights
@@ -246,6 +280,7 @@ def train_scorer(
         "epochs": epochs,
         "learning_rate": learning_rate,
         "seed": seed,
+        "l2_regularization": l2_regularization,
         "selected_epoch": selected.epoch,
     }
     final_averaged = Weights(
