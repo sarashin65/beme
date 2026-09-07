@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BeME issue #21 — 疎な語彙重み 実験レポート</title>
+<style>
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d;
+  --text: #e6edf3; --text-muted: #8b949e; --accent: #58a6ff;
+  --green: #3fb950; --orange: #d29922; --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans JP", Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--text); line-height: 1.7;
+}
+.container { max-width: 800px; margin: 0 auto; padding: 24px 16px; }
+h1 { font-size: 1.5em; margin: 0 0 8px; color: var(--accent); }
+h2 { font-size: 1.2em; margin: 36px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); color: #f0f6fc; }
+h3 { font-size: 1.05em; margin: 24px 0 8px; color: #f0f6fc; }
+p, li { margin-bottom: 8px; }
+.meta { color: var(--text-muted); font-size: 0.9em; margin-bottom: 24px; }
+.meta span { display: inline-block; margin-right: 16px; }
+
+.conclusion {
+  background: linear-gradient(135deg, rgba(88,166,255,0.08), rgba(63,185,80,0.05));
+  border: 1px solid var(--accent); border-radius: 8px; padding: 20px; margin: 24px 0;
+}
+.warning {
+  background: linear-gradient(135deg, rgba(248,81,73,0.08), rgba(210,153,34,0.05));
+  border: 1px solid var(--orange); border-radius: 8px; padding: 20px; margin: 24px 0;
+}
+
+.table-wrap { overflow-x: auto; margin: 16px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9em; min-width: 400px; }
+th, td { padding: 8px 12px; text-align: left; border: 1px solid var(--border); }
+th { background: var(--surface); color: var(--text-muted); font-weight: 600; }
+td.r { text-align: right; font-variant-numeric: tabular-nums; }
+tr:hover td { background: rgba(88,166,255,0.04); }
+tr.highlight { background: rgba(63,185,80,0.08); }
+tr.bad { background: rgba(248,81,73,0.06); }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: 600; }
+.badge-green { background: rgba(63,185,80,0.15); color: var(--green); }
+.badge-orange { background: rgba(210,153,34,0.15); color: var(--orange); }
+.badge-red { background: rgba(248,81,73,0.15); color: var(--red); }
+
+hr { border: none; border-top: 1px solid var(--border); margin: 36px 0; }
+pre {
+  background: var(--code-bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 14px 16px; overflow-x: auto;
+  font-size: 0.85em; line-height: 1.5; margin: 12px 0;
+}
+code { background: var(--code-bg); padding: 2px 5px; border-radius: 3px; font-size: 0.88em; }
+
+@media (max-width: 600px) {
+  .container { padding: 16px 12px; }
+  h1 { font-size: 1.3em; }
+  td, th { padding: 6px 8px; font-size: 0.85em; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>BeME issue #21 — 疎な語彙重み</h1>
+<p style="font-size:1.1em;color:#f0f6fc;margin-bottom:4px">実験結果と方向転換（デバイス端の個人適応へ）</p>
+<div class="meta">
+  <span>📅 2026-09-07</span>
+  <span>🔗 <a href="https://github.com/sarashin65/beme/issues/21">sarashin65/beme#21</a></span>
+  <span>🖥 ws (GPU) 実行</span>
+</div>
+
+<div class="conclusion">
+<strong>結論</strong>: 疎な語彙重みは汎用特徴として <strong>A8 比 -29.2%</strong> の改善（S0）を示したが、F2（-40.6%）には及ばず、<strong>F2 と冗長</strong>（S1 = C0 と同等）。理論上限分析（Opus 実測）により汎用特徴としての撤退基準を確認。<br><br>
+→ issue #21 を <strong>「デバイス端の個人適応（ユーザー語彙学習）」</strong>として再定義。既存基盤はそのまま再利用する。
+</div>
+
+<hr>
+
+<!-- ===== 1. 経緯 ===== -->
+<h2>1. 経緯 — 符号バグの発見と修正</h2>
+
+<div class="warning">
+<strong>⚠️ 最初の実験は符号バグで失敗</strong><br>
+`_update_sparse_weights` が正解トークンに <strong>+lr</strong> を加算していた。`edge_cost` はコスト（Viterbi は最小化）なので、正解トークンは <strong>-lr</strong> すべきだった。<br><br>
+結果: 疎重みが <strong>max 280</strong> まで暴走し、S0 = 789（A8 より +52% 悪化）· 訓練誤差が epoch ごとに増加。
+</div>
+
+<h3>符号バグの 4 つの証拠（Opus 実測）</h3>
+<ol>
+  <li><strong>学習後重みの意味的逆転</strong>: 「の/の」= +183.5（最コスト高 = 避ける）·「の/之」= -178.8（最コスト低 = 選ぶ）→ モデルが「異体字を書け」と学習していた</li>
+  <li><strong>訓練誤差の単調増加</strong>: 3377 → 3530（epoch ごとに悪化）</li>
+  <li><strong>更新回数が A8 の 5.6 倍</strong>（収束せず暴走）</li>
+  <li><strong>6行の最小再現コード</strong>で確認</li>
+</ol>
+
+<h3>修正内容（コミット fe7bb0f）</h3>
+<ul>
+  <li>符号反転: gold = <strong>-lr</strong> / pred = <strong>+lr</strong></li>
+  <li>surface 層削除（pair 単層に。Opus が情報量ゼロを実証: surface ≡ Σ_r pair[r,s]）</li>
+  <li><code>load()</code> の suffix 判定バグ修正</li>
+  <li>テストに挙動アサーション追加（符号方向の回帰防止）</li>
+</ul>
+
+<hr>
+
+<!-- ===== 2. 最終結果 ===== -->
+<h2>2. 最終結果（符号修正後・d1 test・epochs 5・lr 0.1）</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>条件</th><th class="r">seed9</th><th class="r">seed17</th><th class="r">seed33</th><th class="r">中央値</th><th>vs A8</th></tr></thead>
+<tbody>
+<tr><td>A8（ベース）</td><td class="r">521</td><td class="r">520</td><td class="r">520</td><td class="r">520</td><td>—</td></tr>
+<tr><td>C0（A8+corpus=F2）</td><td class="r">309</td><td class="r">308</td><td class="r">315</td><td class="r">309</td><td><span class="badge badge-green">-40.6%</span></td></tr>
+<tr class="highlight"><td><strong>S0</strong>（A8+sparse）</td><td class="r"><strong>357</strong></td><td class="r"><strong>368</strong></td><td class="r"><strong>375</strong></td><td class="r"><strong>368</strong></td><td><span class="badge badge-green">-29.2%</span></td></tr>
+<tr><td><strong>S1</strong>（C0+sparse）</td><td class="r"><strong>317</strong></td><td class="r"><strong>304</strong></td><td class="r"><strong>312</strong></td><td class="r"><strong>312</strong></td><td>C0 と同等 (±8)</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>疎重みの学習後値域（暴走が収まった）</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>条件</th><th class="r">pair エントリ数</th><th class="r">max |w|</th></tr></thead>
+<tbody>
+<tr><td>S0 (seed 9/17/33)</td><td class="r">6,537 / 5,989 / 6,011</td><td class="r">0.7〜0.9</td></tr>
+<tr><td>S1 (seed 9/17/33)</td><td class="r">2,647 / 3,586 / 3,579</td><td class="r">0.7〜0.8</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>Opus の monkeypatch 実測と完全一致</strong>（S0: 368, S1: 312）。符号修正の正しさが独立に確認された。</p>
+
+<hr>
+
+<!-- ===== 3. 解釈 ===== -->
+<h2>3. 解釈</h2>
+
+<h3>3.1 疎重みは単体で有効、でも F2 と冗長</h3>
+<ul>
+  <li><strong>S0（-29.2%）</strong>: 疎重み単体でも大きく改善。学習データ由来の語彙知識が効いている</li>
+  <li><strong>S1 ≈ C0（312 vs 309）</strong>: F2 に疎重みを足しても改善なし → <strong>同じ信号源</strong>（学習データの語彙知識）で F2 の方が強い</li>
+</ul>
+
+<h3>3.2 理論上限（Opus 実測）</h3>
+<pre><code>完全記憶オラクル（全ペアを覚えた理想器）でも:
+  C0 上: 309 → 291（-5.8%・McNemar p = 0.13 → 有意差なし）
+  train を 1,250 → 10,000 に増やしても改善は横ばい</code></pre>
+<p><strong>汎用特徴としての撤退基準は満たされた</strong>（312 vs 309 で p &lt; 0.05 未達）。</p>
+
+<hr>
+
+<!-- ===== 4. 方向転換 ===== -->
+<h2>4. 方向転換: デバイス端の個人適応へ</h2>
+
+<p>汎用特徴としては撤退するが、<strong>基盤はそのまま再利用</strong>して「個人適応」へ転用する。</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th></th><th>汎用特徴（撤退）</th><th>個人適応（新方向）</th></tr></thead>
+<tbody>
+<tr><td><strong>対象</strong></td><td>学習データ由来の語彙知識</td><td>人名・地名・専門用語・書き癖</td></tr>
+<tr><td><strong>信号源</strong></td><td>d1 コーパス（F2 が強い）</td><td>ユーザーの変換履歴 / 辞書登録</td></tr>
+<tr><td><strong>F2 との関係</strong></td><td>冗長（同じ信号）</td><td><strong>相補的</strong>（F2 は原理的にカバー不能）</td></tr>
+<tr><td><strong>実装</strong></td><td>—</td><td>既存の <code>SparseLexicalWeights</code>・sidecar I/O・学習配線を再利用</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>次のステップ</h3>
+<ol>
+  <li><strong>ユーザー辞書の取得方法の設計</strong>（変換履歴 / 辞書登録 UI）</li>
+  <li><strong>個人適応の学習方式</strong>（適応データの形式・正解信号）</li>
+  <li><strong>F2 + 個人適応の組合せ実験</strong></li>
+</ol>
+
+<hr>
+
+<!-- ===== 5. 実装状態 ===== -->
+<h2>5. 実装状態（feat/issue21-sparse-weights・コミット fe7bb0f）</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>項目</th><th>状態</th></tr></thead>
+<tbody>
+<tr><td>SparseLexicalWeights クラス</td><td>✅ 実装（pair backoff + バイナリ sidecar I/O）</td></tr>
+<tr><td>学習配線（train_scorer 連携）</td><td>✅ 実装（符号修正済み・エポックスナップショット）</td></tr>
+<tr><td>CLI（--sparse-weights / --l2-regularization）</td><td>✅ 実装</td></tr>
+<tr><td>ガード（初期重み必須チェック）</td><td>✅ 実装（N1/N2）</td></tr>
+<tr><td>テスト</td><td>✅ 688 passed（符号方向の挙動アサーション含む）</td></tr>
+<tr><td>Opus レビュー</td><td>✅ 2 ラウンド（R1-R4 → N1-N5）</td></tr>
+</tbody>
+</table>
+</div>
+
+<hr>
+
+<h2>付録: 実行環境</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>項目</th><th>値</th></tr></thead>
+<tbody>
+<tr><td>実行機</td><td>ws（GPU 3060Ti + Arc B70・vLLM コンテナ停止後）</td></tr>
+<tr><td>データ</td><td>d1 train/dev/test（12,000 / 2,000 / 2,000 ケース）</td></tr>
+<tr><td>学習設定</td><td>epochs 5・lr 0.1・seed 9/17/33・beam 64</td></tr>
+<tr><td>疎重み初期値</td><td>空テーブル（--sparse-weights empty_sparse）</td></tr>
+<tr><td>分析</td><td>Opus（claude-opus-5）実験分析 + monkeypatch 検証</td></tr>
+</tbody>
+</table>
+</div>
+
+</div>
+</body>
+</html>
