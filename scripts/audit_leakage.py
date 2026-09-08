@@ -13,10 +13,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import sys
 import tempfile
-import unicodedata
 from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +25,10 @@ if str(SRC) not in sys.path:
 from beme.benchmark import load_ajimee_cases, load_mozc_cases  # noqa: E402
 from beme.evaluation import load_cases  # noqa: E402
 from beme.training_data import TrainingExample, load_jsonl  # noqa: E402
+try:  # Works both as ``python scripts/audit_leakage.py`` and via importlib.
+    from scripts.e0_leakage_common import document_ngrams, normalize_text
+except ModuleNotFoundError:  # pragma: no cover - direct script fallback
+    from e0_leakage_common import document_ngrams, normalize_text
 
 
 def _sha256(path: Path) -> str:
@@ -38,7 +40,7 @@ def _sha256(path: Path) -> str:
 
 
 def _normalized(value: str) -> str:
-    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value))
+    return normalize_text(value)
 
 
 def split_for_article(article_id: str, seed: int, ranges: list[list[Any]]) -> str | None:
@@ -131,11 +133,10 @@ def audit_evaluation_overlap(d1_dir: Path, ajimee_path: Path, mozc_path: Path, c
     d1_ngrams = set()
     for example in d1["train"]:
         for text in (example.target_surface, example.left_context, example.right_context):
-            normalized = _normalized(text)
-            d1_ngrams.update(normalized[index:index + 12] for index in range(max(0, len(normalized) - 11)))
+            d1_ngrams.update(document_ngrams(text))
     result = {}
     for name, values in evaluation.items():
-        eval_ngrams = {gram for text in values["documents"] for gram in (text[index:index + 12] for index in range(max(0, len(text) - 11)))}
+        eval_ngrams = {gram for text in values["documents"] for gram in document_ngrams(text)}
         reading_count = len(values["readings"] & d1_readings)
         vocabulary_count = len(values["surfaces"] & train_surfaces)
         # counts_as_leakage classifies the metric, not this run: a shared

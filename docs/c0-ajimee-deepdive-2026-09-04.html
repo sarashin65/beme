@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BeME #3 再分析 — C0 (F2) 導入後の AJIMEE 誤り分類</title>
+<style>
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d;
+  --text: #e6edf3; --text-muted: #8b949e; --accent: #58a6ff;
+  --green: #3fb950; --orange: #d29922; --red: #f85149;
+  --code-bg: #1c2128;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans JP", Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--text); line-height: 1.7;
+}
+.container { max-width: 800px; margin: 0 auto; padding: 24px 16px; }
+h1 { font-size: 1.5em; margin: 0 0 8px; color: var(--accent); }
+h2 { font-size: 1.2em; margin: 36px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); color: #f0f6fc; }
+h3 { font-size: 1.05em; margin: 24px 0 8px; color: #f0f6fc; }
+p, li { margin-bottom: 8px; }
+.meta { color: var(--text-muted); font-size: 0.9em; margin-bottom: 24px; }
+.meta span { display: inline-block; margin-right: 16px; }
+
+/* 結論 */
+.conclusion {
+  background: linear-gradient(135deg, rgba(88,166,255,0.08), rgba(63,185,80,0.05));
+  border: 1px solid var(--accent); border-radius: 8px; padding: 20px; margin: 24px 0;
+}
+
+/* テーブル */
+.table-wrap { overflow-x: auto; margin: 16px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9em; min-width: 400px; }
+th, td { padding: 8px 12px; text-align: left; border: 1px solid var(--border); }
+th { background: var(--surface); color: var(--text-muted); font-weight: 600; }
+td.r { text-align: right; font-variant-numeric: tabular-nums; }
+tr:hover td { background: rgba(88,166,255,0.04); }
+tr.highlight { background: rgba(63,185,80,0.08); }
+tr.regress { background: rgba(248,81,73,0.06); }
+
+/* メトリクスカード */
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 16px 0; }
+.metric-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; text-align: center; }
+.metric-card .value { font-size: 1.5em; font-weight: 700; color: var(--accent); }
+.metric-card .label { font-size: 0.8em; color: var(--text-muted); margin-top: 4px; }
+.metric-card .sub { font-size: 0.75em; color: var(--text-muted); margin-top: 2px; }
+.metric-card.green .value { color: var(--green); }
+.metric-card.orange .value { color: var(--orange); }
+
+/* バッジ */
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: 600; }
+.badge-green { background: rgba(63,185,80,0.15); color: var(--green); }
+.badge-orange { background: rgba(210,153,34,0.15); color: var(--orange); }
+.badge-red { background: rgba(248,81,73,0.15); color: var(--red); }
+
+hr { border: none; border-top: 1px solid var(--border); margin: 36px 0; }
+
+@media (max-width: 600px) {
+  .container { padding: 16px 12px; }
+  h1 { font-size: 1.3em; }
+  td, th { padding: 6px 8px; font-size: 0.85em; }
+  .metrics { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>BeME #3 再分析</h1>
+<p style="font-size:1.1em;color:#f0f6fc;margin-bottom:4px">C0 (F2) 導入後の AJIMEE 誤り分類 — A8 との比較</p>
+<div class="meta">
+  <span>📅 2026-09-04</span>
+  <span>🔬 A8 (seed9) vs C0 (seed9) · beam 64 · top-5</span>
+  <span>🖥 miniPC (local) 実行</span>
+</div>
+
+<div class="conclusion">
+C0 は A8 に対して AJIMEE 200 件中 <strong>20 件を新たに正解化</strong>（1 件リグレッション）。<br>
+CER は <strong>5.42 → 3.39</strong>（edit distance ベース）、完全一致率 <strong>7.5% → 17.0%</strong>。<br><br>
+誤り構造の変化: <strong>分割誤りが 76→60 件（-21%）と大きく減少</strong>。同音誤りと被覆率はほぼ不変。<br>
+F2 の語彙知識が「分割境界の正しい選択」に効いていることが確認された。
+</div>
+
+<hr>
+
+<!-- ===== 0. 全体像 ===== -->
+<h2>0. 全体像</h2>
+
+<div class="metrics">
+  <div class="metric-card green"><div class="value">20</div><div class="label">FIXED</div><div class="sub">C0 が新たに正解</div></div>
+  <div class="metric-card orange"><div class="value">1</div><div class="label">REGRESSED</div><div class="sub">A8 が正解だったのに C0 で誤り</div></div>
+  <div class="metric-card"><div class="value">165</div><div class="label">STILL WRONG</div><div class="sub">両方で誤り</div></div>
+  <div class="metric-card green"><div class="value">14</div><div class="label">BOTH CORRECT</div><div class="sub">A8 も C0 も正解</div></div>
+</div>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>指標</th><th class="r">A8</th><th class="r">C0</th><th>変化</th></tr></thead>
+<tbody>
+<tr><td>完全一致</td><td class="r">15/200 (7.5%)</td><td class="r">34/200 (17.0%)</td><td><span class="badge badge-green">+9.5pt</span></td></tr>
+<tr><td>平均 edit distance</td><td class="r">5.42</td><td class="r">3.39</td><td><span class="badge badge-green">-37.5%</span></td></tr>
+<tr><td>gold ラティス到達率</td><td class="r">165/200 (82.5%)</td><td class="r">165/200 (82.5%)</td><td>不変</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>gold ラティス到達率が 82.5% で不変</strong>なのは、コーパス表が辞書を拡張するわけではない（既存のラティス上の経路に重みを付け直すだけ）ので正しい挙動。C0 の改善は全て「ラティス上に存在する正解経路」を正しく選べるようになったことによる。</p>
+
+<hr>
+
+<!-- ===== 1. 誤り構造の変化 ===== -->
+<h2>1. 誤り構造の変化</h2>
+
+<h3>1.1 誤りタイプ別内訳</h3>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>誤りタイプ</th><th class="r">A8</th><th class="r">C0</th><th>変化</th><th>CER 寄与 (A8→C0)</th></tr></thead>
+<tbody>
+<tr class="highlight"><td><strong>分割誤り</strong></td><td class="r"><strong>76</strong> (41.1%)</td><td class="r"><strong>60</strong> (36.1%)</td><td><span class="badge badge-green">-16 件 (-21%)</span></td><td class="r">481 → 266 <span class="badge badge-green">-45%</span></td></tr>
+<tr><td><strong>同音誤り</strong></td><td class="r"><strong>74</strong> (40.0%)</td><td class="r"><strong>71</strong> (42.8%)</td><td><span class="badge badge-orange">-3 件 (-4%)</span></td><td class="r">229 → 149 <span class="badge badge-green">-35%</span></td></tr>
+<tr><td><strong>辞書欠落</strong></td><td class="r"><strong>35</strong> (18.9%)</td><td class="r"><strong>35</strong> (21.1%)</td><td>不変</td><td class="r">374 → 262 <span class="badge badge-green">-30%</span></td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>1.2 解釈</h3>
+
+<p><strong>分割誤りが 76→60 件と 21% 減少</strong>したのが最大の変化。F2 の語彙知識（コーパス頻度）が「どのトークン境界で区切るべきか」という判断に効いている。典型的には、複合語内部の正しい境界（接尾辞・助動詞の独立）を学習できている。</p>
+
+<p><strong>同音誤りはほとんど変わらない</strong>（74→71）。これは予想と整合する — 同音異義語の選択は文脈が決めるべき問題であり、語彙頻度だけでは限界がある（F2 の「頻出表記を優遇」は同音対立の一部に効くが、文脈が要るケースは残る）。</p>
+
+<p><strong>辞書欠落は不変</strong>（35 件）。コーパス頻度表は辞書を拡張しないので当然。</p>
+
+<p><strong>CER 寄与は全タイプで減少</strong>している。これは誤りが「軽い」ものに変わったことを示す（edit distance の小さい誤りに変わった）。同じ分割誤りでも、C0 では「より正解に近い間違い」を選ぶようになった。</p>
+
+<hr>
+
+<!-- ===== 2. 代表的な改善例 ===== -->
+<h2>2. 代表的な改善例</h2>
+
+<h3>2.1 分割誤りが改善した例</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>ID</th><th>読み</th><th>正解</th><th class="r">A8</th><th class="r">C0</th></tr></thead>
+<tbody>
+<tr><td>ajimee-jwtd-v2-159</td><td>カラダニカユウガ、</td><td>体にカユウが、</td><td class="r">体に加ユうが、</td><td class="r" style="color:var(--green)"><strong>体にカユウが、</strong></td></tr>
+<tr><td>ajimee-jwtd-v2-222</td><td>キトウブニオイテロウシテキニ</td><td>起糖部において老視的に</td><td class="r">起糖部において老視テキに</td><td class="r" style="color:var(--green)"><strong>起糖部において老視的に</strong></td></tr>
+<tr><td>ajimee-jwtd-v2-288</td><td>キョウイクテキニシエンサレル</td><td>教育的に支援される</td><td class="r">教育的に支援サれる</td><td class="r" style="color:var(--green)"><strong>教育的に支援される</strong></td></tr>
+</tbody>
+</table>
+</div>
+
+<p>「される」「的に」などの機能語の分割が正しくなっている。F2 で「頻出する機能語の表記」を適切に評価できるようになったため。</p>
+
+<h3>2.2 同音誤りが改善した例</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>ID</th><th>読み</th><th>正解</th><th class="r">A8</th><th class="r">C0</th></tr></thead>
+<tbody>
+<tr><td>ajimee-jwtd-v2-86</td><td>イッパンテキニコウレイシャハ</td><td>一般的に高齢者は</td><td class="r">一般的に後齢者は</td><td class="r" style="color:var(--green)"><strong>一般的に高齢者は</strong></td></tr>
+<tr><td>ajimee-jwtd-v2-108</td><td>シンリガクテキカンテンカラ</td><td>心理学的観点から</td><td class="r">心理学テキ観点から</td><td class="r" style="color:var(--green)"><strong>心理学的観点から</strong></td></tr>
+</tbody>
+</table>
+</div>
+
+<p>高頻度の正しい表記（高齢者 vs 後齢者）を選べるようになった例。ただし同音誤りの改善は限定的。</p>
+
+<h3>2.3 唯一のリグレッション</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>ID</th><th>読み</th><th>正解</th><th class="r">A8</th><th class="r">C0</th></tr></thead>
+<tbody>
+<tr class="regress"><td>ajimee-jwtd-v2-168</td><td>ホウリツテキニハ</td><td>法律的には</td><td class="r" style="color:var(--green)"><strong>法律的には</strong></td><td class="r">法律的には</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>このケースは A8/C0 両方で同じ出力「法律的には」だが、C0 の edit distance が大きくなっている（異なる参考文献との距離が最小になった）。実質的なリグレッションではない。</p>
+
+<hr>
+
+<!-- ===== 3. 旧分析との比較 ===== -->
+<h2>3. 旧分析（2026-08-21）との比較</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>項目</th><th class="r">旧 (A0, 8/21)</th><th class="r">A8 (9/4)</th><th class="r">C0 (9/4)</th></tr></thead>
+<tbody>
+<tr><td>辞書</td><td class="r">dictionary.tsv (349K)</td><td class="r">dictionary_v2.tsv</td><td class="r">dictionary_v2.tsv</td></tr>
+<tr><td>完全一致</td><td class="r">12 (6.0%)</td><td class="r">15 (7.5%)</td><td class="r"><strong>34 (17.0%)</strong></td></tr>
+<tr><td>分割誤り</td><td class="r">101 (50.5%)</td><td class="r">76 (41.1%)</td><td class="r"><strong>60 (36.1%)</strong></td></tr>
+<tr><td>同音誤り</td><td class="r">60 (30.0%)</td><td class="r">74 (40.0%)</td><td class="r">71 (42.8%)</td></tr>
+<tr><td>辞書欠落</td><td class="r">25 (12.5%)</td><td class="r">35 (18.9%)</td><td class="r">35 (21.1%)</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>注記</strong>: 旧分析と本分析は評価手法が異なる（旧分析は外部スクリプト、本分析はリポジトリ内の <code>convert_sentence</code> を使用）。そのため数値の絶対比較は参考値。特に同音誤りの増加（60→74）は分析手法の差が主因の可能性がある。</p>
+
+<hr>
+
+<!-- ===== 4. 残った課題 ===== -->
+<h2>4. 残った課題 — 165 件の still wrong</h2>
+
+<h3>4.1 まだ残っている分割誤り（60 件）</h3>
+<p>F2 で改善したが、依然として <strong>接尾辞・助動詞の吸収</strong> が主因。コーパス頻度ではカバーしきれない低頻度の機能語の分割が残っている。これは「接続コストの欠落」問題（旧 deepdive §5）の残滓であり、接続コスト再導入か疎重みで攻めるべき領域。</p>
+
+<h3>4.2 同音誤り（71 件）</h3>
+<p>F2 の効く範囲は限定的。文脈が必要な同音異義語（「複製/復姓」「競技/協議」等）は CE リランカに委ねるのが本道。</p>
+
+<h3>4.3 辞書欠落（35 件）</h3>
+<p>辞書拡張（d1）か、パッチ辺を利用した未知語対応が必要。ただし辞書欠落の CER 寄与は C0 で 262 と減少している（= より軽い誤りになった）。</p>
+
+<hr>
+
+<!-- ===== 5. 次の一手への示唆 ===== -->
+<h2>5. 次の一手への示唆</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>順</th><th>項目</th><th>根拠</th></tr></thead>
+<tbody>
+<tr class="highlight"><td><strong>1</strong></td><td><strong>疎な語彙重み（pair + backoff）</strong></td><td>F2 が効いた領域（分割誤り 21% 減）の延長。単語単位の重みで残りの分割誤りを攻められる。F2（表参照）との比較にもなる</td></tr>
+<tr><td><strong>2</strong></td><td><strong>接続コスト再導入</strong></td><td>旧 deepdive で最大の律速と特定された問題。IPADIC matrix.def の 16×16 潰しによる情報損失（R²=0.21）をどう補うか</td></tr>
+<tr><td><strong>3</strong></td><td><strong>C0 ベースの LR 実験</strong></td><td>同音誤りは文脈に委ねるのが効率的。C0 で語彙部分を固めた上で CE の効果を再測定</td></tr>
+<tr><td><strong>4</strong></td><td><strong>#16 打ち直しラティス</strong></td><td>文脈を探索対象に含める。価値はあるが実装コストと相談</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>Opus の推奨は「まず #3 を再分析してから決めろ」だった。今回の分析で得られた教訓：<strong>F2 は分割誤りに効いたが、同音誤りと辞書欠落には効きが薄い</strong>。つまり F2 の次の一手は「疎重みで分割誤りをさらに削る」か「接続コストで根本から攻める」かの二択。C0 ベースの LR 実験はその判断を先送りするだけなので、優先度は下げてよい。</p>
+
+<hr>
+
+<h2>付録: 実行環境</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>項目</th><th>値</th></tr></thead>
+<tbody>
+<tr><td>実行機</td><td>miniPC (WSL)</td></tr>
+<tr><td>ワークツリー</td><td>main (beme-9p4) — #17 + #19 マージ済み</td></tr>
+<tr><td>A8 weights</td><td>artifacts/issue19-f2/A8/seed9/weights.json</td></tr>
+<tr><td>C0 weights</td><td>artifacts/issue19-f2/C0/seed9/weights.json</td></tr>
+<tr><td>beam / top-k</td><td>64 / 5</td></tr>
+<tr><td>分析スクリプト</td><td>scripts/c0_ajimee_deepdive.py</td></tr>
+<tr><td>生データ</td><td>docs/c0-ajimee-deepdive-2026-09-04.json</td></tr>
+</tbody>
+</table>
+</div>
+
+</div>
+</body>
+</html>

@@ -366,6 +366,18 @@ CORPUS_V1_A8_SPEC = FeatureSpec(
     _A8_BASE.transition_features,
     DECOMPOSED_V1_SPEC.family,
 )
+# C0 + IPADIC matrix: adds trans.matrix_cost on top of C0, with the
+# (pos, right_id) transition state required by the matrix feature.
+# Used for the A' fixed-weight experiment (issue #21 follow-up): the
+# matrix weight is pinned at 0.5 (MeCab parity) rather than learned,
+# because d1-trained learners collapse it toward 0.
+CORPUS_MATRIX_V1_A8_SPEC = FeatureSpec(
+    "decomposed_v1-no_script-surface_len+corpus_v1+matrix_v1",
+    CORPUS_V1_A8_SPEC.lexical_features,
+    (*CORPUS_V1_A8_SPEC.transition_features, "trans.matrix_cost"),
+    DECOMPOSED_V1_SPEC.family,
+    ("pos", "right_id"),
+)
 _SPEC_REGISTRY = {
     "legacy_v1": LEGACY_V1_SPEC,
     "decomposed_v1": DECOMPOSED_V1_SPEC,
@@ -380,6 +392,7 @@ _SPEC_REGISTRY = {
     MATRIX_FREQ_V1_SPEC.id: MATRIX_FREQ_V1_SPEC,
     CORPUS_V1_A8_SPEC.id: CORPUS_V1_A8_SPEC,
     CORPUS_V1_A0_SPEC.id: CORPUS_V1_A0_SPEC,
+    CORPUS_MATRIX_V1_A8_SPEC.id: CORPUS_MATRIX_V1_A8_SPEC,
 }
 
 

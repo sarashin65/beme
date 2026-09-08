@@ -9,3 +9,5 @@ data/d1/*.jsonl
 data/corpus_freq_v1.bin
 
 artifacts/
+data/e0/source_articles.jsonl
+data/e0/article-source/
